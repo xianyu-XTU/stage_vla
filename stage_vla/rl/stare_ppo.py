@@ -4,19 +4,15 @@ v1（M0~M1）：状态版阶段感知 PPO。策略网络是 MLP（rsl_rl），�
 奖励是阶段感知稠密奖励（``stage_potential_reward + stage_transition_reward``）。
 入口 :func:`train_stare` 委托 :mod:`stage_vla.rl.runner` 启动 Isaac 训练。
 
-v2（M2 预留，对应申请书"以 OpenVLA 为基础 + PPO 构建 StARe-PPO"）：
-把 VLA 当作 actor 包进 PPO，即 "VLA-as-policy"。本文件预留：
+v2（M2）：把 VLA 当作 actor 包进 PPO，即 "VLA-as-policy"。接口实现在
+:mod:`stage_vla.rl.vla_policy`，融合训练循环在 :mod:`stage_vla.rl.ppo_loop`
+（:func:`train_vla_in_loop`）。本文件提供 v1 状态版训练（:func:`train_stare`）。
 
-- :class:`VLAAsPolicy` 抽象（``act(obs, instruction, image)``）；
-- :func:`train_vla_in_loop` 融合训练入口（M2 实现）。
-
-8GB 显存铁律：OpenVLA-7B（4-bit ≈ 4.1GB）与 Isaac 渲染不可共存，融合训练默认
-``rl.vla.loop_mode=record_replay`` 或 TCP 分离进程，或 ``vla_backend=vision_only``。
+8GB 显存铁律：OpenVLA-7B（4-bit ≈ 4.1GB）与 Isaac 渲染不可共存，融合训练用
+``vla_backend=vision_only``（冻结视觉塔 ~1.5GB bf16）作 in-sim actor。
 """
 
 from __future__ import annotations
-
-from abc import ABC, abstractmethod
 
 from ..core.logging import get_logger
 
@@ -104,25 +100,11 @@ def _build_env_cfg(settings, num_envs: int, *, cube_to_grasp=None, cube_to_stack
 
 
 # ============================================================================
-# v2 预留：VLA-as-policy 融合
+# v2：VLA-as-policy 融合（实现在 vla_policy.py / ppo_loop.py，这里重导出）
 # ============================================================================
-class VLAAsPolicy(ABC):
-    """把 VLA 策略包装成可被 PPO 当作 actor 的网络（M2 实现）。
+from .vla_policy import VLAAsPolicy  # noqa: E402
 
-    ``act`` 输出动作分布/采样动作；融合训练时还需提供可微动作头与损失回传接口。
-    """
-
-    @abstractmethod
-    def act(self, obs, instruction: str, image) -> object:
-        """给定观测/指令/图像，返回动作采样与分布信息。"""
-        raise NotImplementedError
-
-
+# train_vla_in_loop 在 ppo_loop.py（M2c 实现），此处惰性导入避免循环
 def train_vla_in_loop(settings, **overrides) -> object:
-    """v2：VLA-as-policy 的融合训练入口（M2 实现）。
-
-    目前未实现，抛出指引性错误，避免误用。
-    """
-    raise NotImplementedError(
-        "StARe-PPO v2（VLA-as-policy 融合训练）为 M2 里程碑。当前可用 v1：train_stare()。"
-    )
+    from .ppo_loop import train_vla_in_loop as _impl
+    return _impl(settings, **overrides)
