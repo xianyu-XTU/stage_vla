@@ -15,7 +15,9 @@
 
 - [x] 无监督阶段分离器**真实实现**（`stages/unsupervised.py`：几何特征提取 +
       多维过分割(K×2) + 任务进度代理排序 + 贪心合并，脱离人工标注；合成轨迹一致性 >0.7）
-- [ ] 语义分离真正驱动训练（`plan.stages` 驱动阈值/权重，不再只是打印）
+- [x] 语义分离真正驱动训练（`semantic.plan_targets` 提取目标方块 + 活动阶段；
+      `filter_stage_weights` 未覆盖阶段完成奖置 0；`train_stare` 解析指令驱动
+      env cfg——已验证 "pick up only" → 活动阶段 [approach,grasp,lift]）
 - [ ] `train_stare.py` 跑通，TensorBoard 出现五阶段覆盖率；与官方基线对比阶段塑形组累积奖励更高
 
 **验收**：合成轨迹上聚类中心与几何 detect 一致性 > 阈值（✅ 已达成）；训练 reward 有限（✅ 已达成）

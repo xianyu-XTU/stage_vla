@@ -15,6 +15,8 @@ from .semantic import (
     SemanticPlan,
     SemanticSeparator,
     SemanticSubGoal,
+    filter_stage_weights,
+    plan_targets,
 )
 from .unsupervised import (
     assign_stages,
@@ -32,6 +34,8 @@ __all__ = [
     "SemanticSeparator",
     "SemanticSubGoal",
     "StageDetector",
+    "filter_stage_weights",
+    "plan_targets",
     "assign_stages",
     "evaluate_consistency",
     "extract_features",

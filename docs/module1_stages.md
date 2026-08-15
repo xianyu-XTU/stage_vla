@@ -9,7 +9,7 @@
 
 | 子模块 | 文件 | 状态 |
 |---|---|---|
-| 语义分离（指令 → 子目标 → 阶段序列） | `stage_vla/stages/semantic.py` | ✅ 规则版（预留 LLM 解析接口） |
+| 语义分离（指令 → 子目标 → 阶段序列） | `stage_vla/stages/semantic.py` | ✅ 规则版（预留 LLM 解析接口）；M1 起**驱动训练**（`plan_targets`/`filter_stage_weights`） |
 | 阶段计算器（信号 → 阶段索引/进度，单一实现） | `stage_vla/stages/calculator.py` | ✅ 纯函数 |
 | 几何阶段检测器（原语 + 委托 calculator） | `stage_vla/stages/detector.py` | ✅ 向量化 |
 | 无监督阶段分离器（脱离人工标注） | `stage_vla/stages/unsupervised.py` | ✅ M1（过分割+进度排序+贪心合并，合成轨迹一致性 >0.7） |

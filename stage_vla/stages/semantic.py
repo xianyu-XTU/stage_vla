@@ -43,6 +43,7 @@ ACTION_KEYWORDS: dict[str, list[str]] = {
 
 # 兜底：未解析出任何子目标时的默认抓取目标
 DEFAULT_GRASP_TARGET = "cube_2"
+DEFAULT_STACK_TARGET = "cube_1"   # 任务默认底座（放置目标）
 DEFAULT_STAGES = ("approach", "grasp", "lift", "move", "stack")
 
 
@@ -138,3 +139,40 @@ class SemanticSeparator:
             target = self.default_target  # 兜底用默认抓取目标
 
         return SemanticSubGoal(action, target, stages)
+
+
+def plan_targets(
+    plan: SemanticPlan,
+    default_grasp: str = DEFAULT_GRASP_TARGET,
+    default_stack: str = DEFAULT_STACK_TARGET,
+) -> tuple[str, str, list[str]]:
+    """从语义计划提取**训练驱动信息**：目标方块 + 活动阶段。
+
+    Returns:
+        (cube_to_grasp, cube_to_stack_on, active_stages)
+        - 抓取子目标（pick up / pick / grab）→ 目标方块
+        - 放置子目标（place on / place / stack / put on）→ 底座方块
+        - active_stages = 指令实际覆盖的阶段序列（未覆盖的阶段不给完成奖）
+    """
+    cube_to_grasp = default_grasp
+    cube_to_stack_on = default_stack
+    for sg in plan.sub_goals:
+        if sg.action in ("pick up", "pick", "grab"):
+            cube_to_grasp = sg.target_entity
+        elif sg.action in ("place on", "place", "stack", "put on"):
+            cube_to_stack_on = sg.target_entity
+    return cube_to_grasp, cube_to_stack_on, list(plan.stages)
+
+
+def filter_stage_weights(
+    weights: dict,
+    stages: list[str],
+    active_stages: list[str] | None,
+) -> dict:
+    """语义计划驱动：指令未覆盖的阶段完成奖置 0（不奖励没要求的子阶段）。"""
+    out = dict(weights)
+    if active_stages is not None:
+        for stage in stages:
+            if stage not in active_stages:
+                out[stage] = 0.0
+    return out

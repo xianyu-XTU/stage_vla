@@ -22,6 +22,8 @@ from .rewards import first_frame_mask, potential_shaping, stage_completion_rewar
 
 # 模块级缓存的阶段检测器（避免每个 reward 调用重建）
 _detector: StageDetector | None = None
+# 活动阶段（语义计划驱动：指令未覆盖的阶段不参与势能塑形）
+_active_stages: list[str] | None = None
 
 
 def _get_detector(stages: list[str] | None = None, thresholds: dict | None = None) -> StageDetector:
@@ -93,8 +95,10 @@ def stage_potential_reward(env, weights: dict | None = None, gamma: float = 0.99
     """阶段势能塑形奖励（Isaac Lab RewardTerm，func(env, **params) -> [N]）。
 
     ``r = (γ·φ(s_t) − φ(s_{t−1})) * progress_shaping_weight``，首帧置零。
+    语义计划驱动：指令未覆盖的阶段列清零，不参与势能塑形。
     """
     cur = compute_stage_progress(env)          # [N, n_stages]
+    cur = _mask_active_stages(cur)
     first = first_frame_mask(env.episode_length_buf)
 
     prev = env.extras.get("_stage_prev_progress")
@@ -131,12 +135,26 @@ def stage_transition_reward(env, weights: dict | None = None) -> torch.Tensor:
     return bonus / env.step_dt
 
 
+def _mask_active_stages(progress: torch.Tensor) -> torch.Tensor:
+    """把非活动阶段的进度列清零（语义计划驱动塑形）。"""
+    global _active_stages
+    if _active_stages is None:
+        return progress
+    det = _get_detector()
+    mask = torch.zeros(progress.shape[1], dtype=torch.bool, device=progress.device)
+    for name in _active_stages:
+        if name in det.stages:
+            mask[det.stages.index(name)] = True
+    return progress * mask.float()
+
+
 def build_stage_rewards_cfg(
     weights: dict,
     thresholds: dict | None = None,
     stages: list[str] | None = None,
     cube_to_grasp: str = "cube_2",
     cube_to_stack_on: str = "cube_1",
+    active_stages: list[str] | None = None,
 ) -> object:
     """构建带阶段感知奖励的 ``RewardsCfg``（需 Isaac 环境导入 isaaclab）。
 
@@ -146,6 +164,7 @@ def build_stage_rewards_cfg(
         stages: 阶段名列表（缺省取 detector 默认五阶段）
         cube_to_grasp, cube_to_stack_on: 目标方块 / 底座方块名（**必须来自 config task**，
             否则阶段检测会盯错方块——旧版写死默认值的隐患）
+        active_stages: 指令覆盖的活动阶段（语义计划驱动；None = 全部阶段）
 
     Returns:
         一个 ``isaaclab.managers.RewardTermCfg`` 集合，可作为 ``env_cfg.rewards`` 使用。
@@ -154,13 +173,14 @@ def build_stage_rewards_cfg(
     from isaaclab.managers import RewardTermCfg as RewardTerm
     from isaaclab.utils.configclass import configclass
 
-    global _detector
+    global _detector, _active_stages
     _detector = StageDetector(
         stages=stages,
         thresholds=thresholds or {},
         cube_to_grasp=cube_to_grasp,
         cube_to_stack_on=cube_to_stack_on,
     )
+    _active_stages = list(active_stages) if active_stages is not None else None
 
     @configclass
     class StageRewardsCfg:

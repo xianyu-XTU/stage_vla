@@ -34,6 +34,7 @@ def main() -> int:
 
     runner = train_stare(
         settings,
+        instruction=instruction,
         num_envs=args.num_envs,
         max_iterations=args.max_iterations,
         headless=args.headless,

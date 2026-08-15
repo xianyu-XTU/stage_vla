@@ -25,14 +25,20 @@ logger = get_logger(__name__)
 
 def train_stare(
     settings,
+    instruction: str | None = None,
     num_envs: int | None = None,
     max_iterations: int | None = None,
     headless: bool = True,
 ) -> object:
     """v1：状态版阶段感知 PPO 训练（**需 Isaac 环境**）。
 
+    **语义分离真正驱动训练**：解析指令 → 语义计划决定
+    - 目标方块（抓哪个、放哪个）→ 阶段检测/奖励盯对的方块；
+    - 活动阶段（指令覆盖的子阶段）→ 未覆盖阶段不给完成奖。
+
     Args:
         settings: 解析后的配置（:class:`~stage_vla.core.config.Settings`）
+        instruction: 语言指令（缺省用 config task.desc）
         num_envs / max_iterations: 覆盖 config 的 ppo 节
         headless: 无头模式
 
@@ -40,6 +46,15 @@ def train_stare(
         OnPolicyRunner（训练完成后包含已保存 checkpoint）
     """
     from .runner import build_agent_cfg, train
+    from ..stages.semantic import SemanticSeparator, plan_targets
+
+    instruction = instruction or settings.task["desc"]
+    plan = SemanticSeparator().parse(instruction)
+    cube_grasp, cube_stack, active_stages = plan_targets(
+        plan,
+        default_grasp=settings.task["cube_to_grasp"],
+        default_stack=settings.task["cube_to_stack_on"],
+    )
 
     ppo_cfg = dict(settings.ppo)
     if num_envs is not None:
@@ -47,10 +62,20 @@ def train_stare(
     if max_iterations is not None:
         ppo_cfg["max_iterations"] = max_iterations
 
-    env_cfg = _build_env_cfg(settings, ppo_cfg["num_envs"])
+    env_cfg = _build_env_cfg(
+        settings,
+        ppo_cfg["num_envs"],
+        cube_to_grasp=cube_grasp,
+        cube_to_stack_on=cube_stack,
+        active_stages=active_stages,
+    )
     agent_cfg = build_agent_cfg(ppo_cfg)
 
-    logger.info("StARe-PPO v1 训练启动：%d 环境 / %d 迭代", ppo_cfg["num_envs"], ppo_cfg["max_iterations"])
+    logger.info(
+        "StARe-PPO v1 训练启动：%d 环境 / %d 迭代 | 指令=%r 目标=(%s→%s) 活动阶段=%s",
+        ppo_cfg["num_envs"], ppo_cfg["max_iterations"],
+        instruction, cube_grasp, cube_stack, active_stages,
+    )
     return train(
         settings.task["id_state"],
         env_cfg,
@@ -60,7 +85,7 @@ def train_stare(
     )
 
 
-def _build_env_cfg(settings, num_envs: int):
+def _build_env_cfg(settings, num_envs: int, *, cube_to_grasp=None, cube_to_stack_on=None, active_stages=None):
     """构造带阶段感知奖励的环境配置（需 Isaac 环境，惰性 import）。"""
     from ..envs.cfg_surgery import build_stage_env_cfg
 
@@ -68,6 +93,9 @@ def _build_env_cfg(settings, num_envs: int):
         settings=settings,
         num_envs=num_envs,
         seed=settings.ppo["seed"],
+        cube_to_grasp=cube_to_grasp,
+        cube_to_stack_on=cube_to_stack_on,
+        active_stages=active_stages,
     )
 
 
