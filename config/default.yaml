@@ -22,6 +22,7 @@ paths:
   siglip_model: "<local>/siglip"                        # SigLIP 视觉编码器
   t5_model: "<local>/t5-xxl"                            # T5-XXL 语言编码器
   lang_embed: "<local>/lang_embed.pt"                   # 预编码语言嵌入
+  vision_only_dir: "<local>/openvla_vision_only"        # 剥离 LLM 的视觉模型（vision_only.pt + meta.pt）
   rdt_repo: "<local>/rdt_repo"                          # RDT 推理代码（拷贝引入，非嵌套仓库）
 
 # ---------- 任务定义 ----------

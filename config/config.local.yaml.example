@@ -15,6 +15,7 @@ paths:
   siglip_model: 'D:\vla_models\siglip'                           # 示例：SigLIP 视觉编码器
   t5_model: 'D:\vla_models\t5-xxl'                               # 示例：T5-XXL 语言编码器
   lang_embed: 'D:\vla_models\lang_embed.pt'                      # 示例：预编码语言嵌入
+  vision_only_dir: 'E:\stage_vla\outputs\openvla_vision_only'    # 示例：剥离 LLM 的视觉模型（旧项目输出，只读引用）
   rdt_repo: 'E:\stage_vla_v2\third_party\rdt_repo'               # 示例：RDT 推理代码（拷贝引入）
 
 # 训练默认并行环境数可在此按本机显存覆盖：

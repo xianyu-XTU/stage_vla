@@ -50,6 +50,99 @@ class DenseFeatureExtractor(FeatureExtractor):
         return x
 
 
+class VisionFeatureExtractor(FeatureExtractor):
+    """冻结视觉塔（DINOv2-L + SigLIP SO400M → 投影器）+ 指令嵌入 → ``[B, 2*llm_dim]``。
+
+    **8GB 纪律**：视觉塔冻结（``requires_grad=False``，前向 bf16），显存 ~1.5GB；
+    只训练动作/价值头。加载本机剥离的视觉模型（``paths.vision_only_dir``），
+    指令嵌入来自 ``paths.lang_embed``（T5 预编码，固定指令）。
+    """
+
+    def __init__(self, settings, device: str = "cuda"):
+        super().__init__()
+        self.device = device
+        self._load(settings)
+
+    # ------------------------------------------------------------------
+    def _load(self, settings) -> None:
+        from ..policies.prismatic import ensure_prismatic_importable  # 惰性，仅视觉模式
+
+        openvla_model = settings.require_path("openvla_model")
+        vision_dir = settings.require_path("vision_only_dir")
+        lang_embed_path = settings.require_path("lang_embed")
+        ensure_prismatic_importable(settings)
+
+        from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
+        from prismatic.extern.hf.modeling_prismatic import (
+            PrismaticProjector,
+            PrismaticVisionBackbone,
+        )
+        from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor
+
+        meta = torch.load(str(vision_dir / "meta.pt"), map_location="cpu")
+        sd = torch.load(str(vision_dir / "vision_only.pt"), map_location="cpu")
+
+        cfg = OpenVLAConfig.from_pretrained(str(openvla_model))
+        self.vision_backbone = PrismaticVisionBackbone(
+            cfg.use_fused_vision_backbone, cfg.image_sizes,
+            cfg.timm_model_ids, cfg.timm_override_act_layers,
+        )
+        self.projector = PrismaticProjector(
+            cfg.use_fused_vision_backbone, self.vision_backbone.embed_dim,
+            cfg.text_config.hidden_size,
+        )
+
+        vb_sd = {k[len("vision_backbone."):]: v for k, v in sd.items() if k.startswith("vision_backbone.")}
+        pj_sd = {k[len("projector."):]: v for k, v in sd.items() if k.startswith("projector.")}
+        self.vision_backbone.load_state_dict(vb_sd)
+        self.projector.load_state_dict(pj_sd)
+        # 冻结 + bf16
+        self.vision_backbone = self.vision_backbone.to(self.device, dtype=torch.bfloat16).eval()
+        self.projector = self.projector.to(self.device, dtype=torch.bfloat16).eval()
+        for p in self.vision_backbone.parameters():
+            p.requires_grad_(False)
+        for p in self.projector.parameters():
+            p.requires_grad_(False)
+
+        self.image_processor = PrismaticImageProcessor.from_pretrained(str(openvla_model))
+
+        # 指令嵌入（兼容 [L,4096] 与 [1,L,4096]），均值池化 → [1, llm_dim]
+        lang = torch.load(str(lang_embed_path), map_location="cpu")
+        emb = lang["embeddings"].to(self.device)
+        if emb.dim() == 3:
+            emb = emb.mean(dim=1)
+        else:
+            emb = emb.mean(dim=0)
+        self.lang_embed = emb.unsqueeze(0)
+
+        self.features_dim = 2 * int(meta["llm_dim"])
+        print(f"[VisionFeatureExtractor] 就绪: features_dim={self.features_dim}, "
+              f"显存 {torch.cuda.memory_allocated()/1e9:.2f}GB")
+
+    # ------------------------------------------------------------------
+    def forward(self, image) -> torch.Tensor:
+        """图像 ``[H,W,3]`` uint8 或 ``[B,H,W,3]`` → ``[B, 2*llm_dim]`` 冻结特征。"""
+        import numpy as np
+
+        arr = np.asarray(image, dtype=np.uint8)
+        if arr.ndim == 3:
+            arr = arr[None]
+        batch = []
+        for img in arr:
+            img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)  # [1,3,H,W]
+            pixel = self.image_processor.apply_transform(img_t).to(self.device, dtype=torch.bfloat16)
+            batch.append(pixel)
+        pixel_values = torch.cat(batch, dim=0)  # [B,6,224,224]
+
+        with torch.no_grad():
+            feats = self.vision_backbone(pixel_values)       # [B, N, vis_dim]
+            proj = self.projector(feats)                     # [B, N, llm_dim]
+            visual = proj.mean(dim=1).float()                # [B, llm_dim]
+            lang = self.lang_embed.float().expand(visual.shape[0], -1)  # [B, llm_dim]
+            out = torch.cat([visual, lang], dim=1)           # [B, 2*llm_dim]
+        return out
+
+
 # ============================================================================
 # VLA 策略接口
 # ============================================================================
@@ -128,6 +221,7 @@ class VisionOnlyPPOPolicy(VLAAsPolicy):
         stage_feedback_dim: int = 0,
         init_log_std: float = -1.0,
         hidden: int = 256,
+        device: str | None = None,
     ):
         super().__init__()
         self.features_dim = features_dim
@@ -138,6 +232,8 @@ class VisionOnlyPPOPolicy(VLAAsPolicy):
         self.actor_head = _MLPHead(head_in, action_dim, hidden)
         self.critic_head = _MLPHead(head_in, 1, hidden)
         self.log_std = nn.Parameter(torch.full((action_dim,), init_log_std))
+        if device is not None:
+            self.to(device)
 
     # ------------------------------------------------------------------
     # 特征 + 阶段反馈 → 头输入
@@ -147,7 +243,8 @@ class VisionOnlyPPOPolicy(VLAAsPolicy):
         if x.dim() == 1:
             x = x.unsqueeze(0)
         if stage_feedback is not None:
-            x = torch.cat([x, torch.as_tensor(stage_feedback, dtype=torch.float32)], dim=-1)
+            fb = torch.as_tensor(stage_feedback, dtype=torch.float32).to(x.device)
+            x = torch.cat([x, fb], dim=-1)
         return x
 
     def _distribution(self, x: torch.Tensor):
