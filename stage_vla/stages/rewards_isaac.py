@@ -129,6 +129,8 @@ def build_stage_rewards_cfg(
     weights: dict,
     thresholds: dict | None = None,
     stages: list[str] | None = None,
+    cube_to_grasp: str = "cube_2",
+    cube_to_stack_on: str = "cube_1",
 ) -> object:
     """构建带阶段感知奖励的 ``RewardsCfg``（需 Isaac 环境导入 isaaclab）。
 
@@ -136,6 +138,8 @@ def build_stage_rewards_cfg(
         weights: config 的 reward_weights（含 action_penalty / progress_shaping / 各阶段名）
         thresholds: config 的 thresholds（阶段切换阈值）
         stages: 阶段名列表（缺省取 detector 默认五阶段）
+        cube_to_grasp, cube_to_stack_on: 目标方块 / 底座方块名（**必须来自 config task**，
+            否则阶段检测会盯错方块——旧版写死默认值的隐患）
 
     Returns:
         一个 ``isaaclab.managers.RewardTermCfg`` 集合，可作为 ``env_cfg.rewards`` 使用。
@@ -145,7 +149,12 @@ def build_stage_rewards_cfg(
     from isaaclab.utils.configclass import configclass
 
     global _detector
-    _detector = StageDetector(stages=stages, thresholds=thresholds or {})
+    _detector = StageDetector(
+        stages=stages,
+        thresholds=thresholds or {},
+        cube_to_grasp=cube_to_grasp,
+        cube_to_stack_on=cube_to_stack_on,
+    )
 
     @configclass
     class StageRewardsCfg:

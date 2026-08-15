@@ -36,11 +36,13 @@ def build_stage_env_cfg(settings, num_envs: int, seed: int, task_id: str | None 
     env_cfg.scene.num_envs = num_envs
     env_cfg.seed = seed
 
-    # 注入阶段感知稠密奖励（权重/阈值/阶段全来自 config）
+    # 注入阶段感知稠密奖励（权重/阈值/阶段/目标方块全来自 config）
     env_cfg.rewards = build_stage_rewards_cfg(
         weights=settings.reward_weights,
         thresholds=settings.thresholds,
         stages=settings.stages,
+        cube_to_grasp=settings.task["cube_to_grasp"],
+        cube_to_stack_on=settings.task["cube_to_stack_on"],
     )
 
     # rsl_rl 5.x 观测组要求观测项合并为一个张量
