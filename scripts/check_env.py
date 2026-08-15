@@ -48,7 +48,8 @@ def main() -> int:
 
     action = torch.zeros(env.action_space.shape, device=env.device)
     for step in range(args.max_steps):
-        obs, rew, terminated, truncated, info = env.step(action)
+        # rsl_rl 5.x VecEnv.step 返回 4 元组（obs, rew, dones, infos），非 gymnasium 5 元组
+        obs, rew, dones, infos = env.step(action)
         if step == 0:
             print(f"[check_env] 首步 reward 形状：{rew.shape}，有限值：{torch.isfinite(rew).all().item()}")
     print("[check_env] 阶段感知奖励已接线，环境构造冒烟通过 ✓")
