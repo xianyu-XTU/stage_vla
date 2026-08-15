@@ -16,6 +16,12 @@ from .semantic import (
     SemanticSeparator,
     SemanticSubGoal,
 )
+from .unsupervised import (
+    assign_stages,
+    evaluate_consistency,
+    extract_features,
+    fit_unsupervised_centers,
+)
 
 __all__ = [
     "ACTION_KEYWORDS",
@@ -26,4 +32,8 @@ __all__ = [
     "SemanticSeparator",
     "SemanticSubGoal",
     "StageDetector",
+    "assign_stages",
+    "evaluate_consistency",
+    "extract_features",
+    "fit_unsupervised_centers",
 ]

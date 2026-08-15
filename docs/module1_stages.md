@@ -12,7 +12,7 @@
 | 语义分离（指令 → 子目标 → 阶段序列） | `stage_vla/stages/semantic.py` | ✅ 规则版（预留 LLM 解析接口） |
 | 阶段计算器（信号 → 阶段索引/进度，单一实现） | `stage_vla/stages/calculator.py` | ✅ 纯函数 |
 | 几何阶段检测器（原语 + 委托 calculator） | `stage_vla/stages/detector.py` | ✅ 向量化 |
-| 无监督阶段分离器（脱离人工标注） | `stage_vla/stages/unsupervised.py` | ⏳ M1 |
+| 无监督阶段分离器（脱离人工标注） | `stage_vla/stages/unsupervised.py` | ✅ M1（过分割+进度排序+贪心合并，合成轨迹一致性 >0.7） |
 | 稠密奖励（势能塑形 + 阶段完成奖） | `stage_vla/stages/rewards.py` + `rewards_isaac.py` | ✅ 纯函数 + Isaac 适配 |
 
 ## 奖励设计要点（回归点）
