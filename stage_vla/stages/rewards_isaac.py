@@ -32,11 +32,15 @@ def _get_detector(stages: list[str] | None = None, thresholds: dict | None = Non
 
 
 def _cube_positions_from_env(env, cube_to_grasp: str, cube_to_stack_on: str) -> dict[str, torch.Tensor]:
-    """从 Isaac 环境读取各方块世界系位置（root_pos_w + env_origins）。"""
+    """从 Isaac 环境读取各方块位置。
+
+    **回归修复**：``root_pos_w`` 已是世界坐标（与 ``ee_frame.target_pos_w`` 同一坐标系），
+    旧代码再加 ``env_origins`` 属重复偏移，导致 ee 到方块的接近距离被算成 ~1.9m（实际 ~0.12m），
+    阶段进度恒为 0、阶段感知奖励静默失效。
+    """
     scene = env.scene
-    env_origins = scene.env_origins
     return {
-        name: scene[name].data.root_pos_w + env_origins
+        name: scene[name].data.root_pos_w
         for name in (cube_to_grasp, cube_to_stack_on, "cube_3")
     }
 
@@ -63,6 +67,8 @@ def _grasp_stacked_signals(env, cube_to_grasp: str, cube_to_stack_on: str) -> tu
 
 def _stage_signals_from_env(env) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
     """统一读取阶段判定所需信号：末端位置 / 方块位置 / 抓取与堆叠信号。"""
+    # 兼容 RslRlVecEnvWrapper（.scene 在内层 ManagerBasedRLEnv 上）
+    env = getattr(env, "unwrapped", env)
     scene = env.scene
     ee_w = scene["ee_frame"].data.target_pos_w[:, 0, :]
     cube_to_grasp = _get_detector().cube_to_grasp
