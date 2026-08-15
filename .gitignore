@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地机器配置（机器级路径，绝不入库）
+config.local.yaml
+
+# 输出与模型权重（只读引用外部磁盘，绝不入库）
+outputs/
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.onnx
+*.npz
+*.h5
+*.gguf
+
+# 日志 / 实验
+*.log
+runs/
+wandb/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 第三方：不嵌套 git 仓库（旧 rdt_repo 嵌套 .git 是坑）
+third_party/**
+!third_party/README.md

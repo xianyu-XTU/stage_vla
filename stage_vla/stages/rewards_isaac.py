@@ -1,0 +1,166 @@
+"""rewards_isaac.py —— Isaac Lab RewardTerm 适配层（**需要 Isaac 环境**）。
+
+将 :mod:`stage_vla.stages.rewards` 的纯函数包装成 Isaac Lab ``RewardTerm(func=..., weight=...)``
+可接受的 ``func(env, **params) -> [N]`` 接口，并做两处关键校正：
+
+- **首帧处理**：reward 在 reset 前计算，用 ``env.episode_length_buf == 1`` 识别新回合首帧，
+  把缓存的 prev 对齐 cur 并置零该帧，杜绝"刚 reset 首帧虚假势能差"。
+- **dt 校正**：reward manager 会把每项 ``* dt``；本模块返回 ``值 / env.step_dt`` 抵消，
+  使 config 权重即为每步名义值（可读、可调）。
+
+注意：本文件 import Isaac Lab（``isaaclab`` / ``isaaclab_tasks``），只能通过
+``isaaclab.bat`` 提供的 Python 环境运行；纯张量部分见 ``rewards.py``。
+"""
+
+from __future__ import annotations
+
+import torch
+
+from . import calculator
+from .detector import StageDetector
+from .rewards import first_frame_mask, potential_shaping, stage_completion_reward
+
+# 模块级缓存的阶段检测器（避免每个 reward 调用重建）
+_detector: StageDetector | None = None
+
+
+def _get_detector(stages: list[str] | None = None, thresholds: dict | None = None) -> StageDetector:
+    global _detector
+    if _detector is None:
+        _detector = StageDetector(stages=stages, thresholds=thresholds or {})
+    return _detector
+
+
+def _cube_positions_from_env(env, cube_to_grasp: str, cube_to_stack_on: str) -> dict[str, torch.Tensor]:
+    """从 Isaac 环境读取各方块世界系位置（root_pos_w + env_origins）。"""
+    scene = env.scene
+    env_origins = scene.env_origins
+    return {
+        name: scene[name].data.root_pos_w + env_origins
+        for name in (cube_to_grasp, cube_to_stack_on, "cube_3")
+    }
+
+
+def _grasp_stacked_signals(env, cube_to_grasp: str, cube_to_stack_on: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """读取抓取 / 堆叠布尔信号（复用任务 mdp 的函数）。"""
+    from isaaclab.managers import SceneEntityCfg
+    from isaaclab_tasks.manager_based.manipulation.stack import mdp
+
+    grasp = mdp.object_grasped(
+        env,
+        robot_cfg=SceneEntityCfg("robot"),
+        ee_frame_cfg=SceneEntityCfg("ee_frame"),
+        object_cfg=SceneEntityCfg(cube_to_grasp),
+    )
+    stacked = mdp.object_stacked(
+        env,
+        robot_cfg=SceneEntityCfg("robot"),
+        upper_object_cfg=SceneEntityCfg(cube_to_grasp),
+        lower_object_cfg=SceneEntityCfg(cube_to_stack_on),
+    )
+    return grasp.float(), stacked.float()
+
+
+def _stage_signals_from_env(env) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    """统一读取阶段判定所需信号：末端位置 / 方块位置 / 抓取与堆叠信号。"""
+    scene = env.scene
+    ee_w = scene["ee_frame"].data.target_pos_w[:, 0, :]
+    cube_to_grasp = _get_detector().cube_to_grasp
+    cube_to_stack_on = _get_detector().cube_to_stack_on
+    cube_pos = _cube_positions_from_env(env, cube_to_grasp, cube_to_stack_on)
+    grasp, stacked = _grasp_stacked_signals(env, cube_to_grasp, cube_to_stack_on)
+    return ee_w, cube_pos, grasp, stacked
+
+
+def compute_stage_progress(env) -> torch.Tensor:
+    """计算当前各阶段完成度 ``[N, n_stages]``（Isaac Lab 环境）。"""
+    ee_w, cube_pos, grasp, stacked = _stage_signals_from_env(env)
+    det = _get_detector()
+    return calculator.signals_to_progress(
+        ee_w, cube_pos, grasp, stacked,
+        stages=det.stages, thresholds=det.thresholds,
+        cube_to_grasp=det.cube_to_grasp, cube_to_stack_on=det.cube_to_stack_on,
+    )
+
+
+def stage_potential_reward(env, weights: dict | None = None, gamma: float = 0.99) -> torch.Tensor:
+    """阶段势能塑形奖励（Isaac Lab RewardTerm，func(env, **params) -> [N]）。
+
+    ``r = (γ·φ(s_t) − φ(s_{t−1})) * progress_shaping_weight``，首帧置零。
+    """
+    cur = compute_stage_progress(env)          # [N, n_stages]
+    first = first_frame_mask(env.episode_length_buf)
+
+    prev = env.extras.get("_stage_prev_progress")
+    prev = torch.zeros_like(cur) if prev is None else prev.to(cur.device)
+    prev = torch.where(first.unsqueeze(1), cur, prev)  # 首帧对齐
+
+    env.extras["_stage_prev_progress"] = cur.clone()
+
+    delta = potential_shaping(cur, prev, gamma=gamma)
+    delta = torch.where(first, torch.zeros_like(delta), delta)  # 首帧不给塑形
+    scale = (weights or {}).get("progress_shaping", 1.0)
+    return (delta * scale) / env.step_dt
+
+
+def stage_transition_reward(env, weights: dict | None = None) -> torch.Tensor:
+    """阶段完成奖励（Isaac Lab RewardTerm，func(env, **params) -> [N]）。首帧置零。"""
+    det = _get_detector()
+    ee_w, cube_pos, grasp, stacked = _stage_signals_from_env(env)
+    cur_stage = calculator.signals_to_stage(
+        ee_w, cube_pos, grasp, stacked,
+        stages=det.stages, thresholds=det.thresholds,
+        cube_to_grasp=det.cube_to_grasp, cube_to_stack_on=det.cube_to_stack_on,
+    )
+    first = first_frame_mask(env.episode_length_buf)
+
+    prev = env.extras.get("_stage_prev_stage")
+    prev = cur_stage.clone() if prev is None else prev.to(cur_stage.device)
+    prev = torch.where(first, cur_stage, prev)  # 首帧对齐
+
+    env.extras["_stage_prev_stage"] = cur_stage.clone()
+
+    bonus = stage_completion_reward(cur_stage, prev, weights or {}, det.stages)
+    bonus = torch.where(first, torch.zeros_like(bonus), bonus)
+    return bonus / env.step_dt
+
+
+def build_stage_rewards_cfg(
+    weights: dict,
+    thresholds: dict | None = None,
+    stages: list[str] | None = None,
+) -> object:
+    """构建带阶段感知奖励的 ``RewardsCfg``（需 Isaac 环境导入 isaaclab）。
+
+    Args:
+        weights: config 的 reward_weights（含 action_penalty / progress_shaping / 各阶段名）
+        thresholds: config 的 thresholds（阶段切换阈值）
+        stages: 阶段名列表（缺省取 detector 默认五阶段）
+
+    Returns:
+        一个 ``isaaclab.managers.RewardTermCfg`` 集合，可作为 ``env_cfg.rewards`` 使用。
+    """
+    from isaaclab.envs import mdp
+    from isaaclab.managers import RewardTermCfg as RewardTerm
+    from isaaclab.utils.configclass import configclass
+
+    global _detector
+    _detector = StageDetector(stages=stages, thresholds=thresholds or {})
+
+    @configclass
+    class StageRewardsCfg:
+        """阶段感知稠密奖励配置。"""
+
+        action_penalty = RewardTerm(func=mdp.action_l2, weight=weights["action_penalty"])
+        stage_progress = RewardTerm(
+            func=stage_potential_reward,
+            params={"weights": weights, "gamma": 0.99},
+            weight=1.0,
+        )
+        stage_transition = RewardTerm(
+            func=stage_transition_reward,
+            params={"weights": weights},
+            weight=1.0,
+        )
+
+    return StageRewardsCfg()

@@ -1,0 +1,22 @@
+# ============================================================================
+# 本地机器配置模板（机器级 · 覆盖 default.yaml 的 paths 等）
+# 复制本文件为 config.local.yaml 并填入本机真实路径。
+# config.local.yaml 已被 .gitignore 排除，绝不提交。
+# 也可用环境变量覆盖：STAGE_VLA_CONFIG=<path> 或 STAGE_VLA_<SECTION>_<KEY>=<value>。
+# ============================================================================
+
+# 覆盖格式：只写需要覆盖的键，未写的沿用 default.yaml
+paths:
+  isaaclab: 'E:\work\IsaacLab'                                   # 示例：Isaac Lab 3.0.0 源码
+  isaac_sim: 'E:\isaac-sim-standalone-6.0.1-windows-x86_64 (2)'  # 示例：Isaac Sim 独立版
+  openvla_root: 'D:\openvla'                                     # 示例：OpenVLA 根（含 prismatic）
+  openvla_model: 'D:\openvla\models\openvla-7b'                  # 示例：OpenVLA-7B 权重
+  rdt_model: 'D:\vla_models\rdt-1b'                              # 示例：RDT-1B 权重
+  siglip_model: 'D:\vla_models\siglip'                           # 示例：SigLIP 视觉编码器
+  t5_model: 'D:\vla_models\t5-xxl'                               # 示例：T5-XXL 语言编码器
+  lang_embed: 'D:\vla_models\lang_embed.pt'                      # 示例：预编码语言嵌入
+  rdt_repo: 'E:\stage_vla_v2\third_party\rdt_repo'               # 示例：RDT 推理代码（拷贝引入）
+
+# 训练默认并行环境数可在此按本机显存覆盖：
+# ppo:
+#   num_envs: 64
