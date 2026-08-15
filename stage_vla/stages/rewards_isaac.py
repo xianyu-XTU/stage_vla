@@ -95,19 +95,18 @@ def stage_potential_reward(env, weights: dict | None = None, gamma: float = 0.99
     """阶段势能塑形奖励（Isaac Lab RewardTerm，func(env, **params) -> [N]）。
 
     ``r = (γ·φ(s_t) − φ(s_{t−1})) * progress_shaping_weight``，首帧置零。
-    语义计划驱动：指令未覆盖的阶段列清零，不参与势能塑形。
+    φ 用非饱和距离势能（:func:`_shaping_potential`），消除随机游走负偏置。
     """
-    cur = compute_stage_progress(env)          # [N, n_stages]
-    cur = _mask_active_stages(cur)
+    cur = _shaping_potential(env)              # [N]
     first = first_frame_mask(env.episode_length_buf)
 
-    prev = env.extras.get("_stage_prev_progress")
+    prev = env.extras.get("_stage_prev_potential")
     prev = torch.zeros_like(cur) if prev is None else prev.to(cur.device)
-    prev = torch.where(first.unsqueeze(1), cur, prev)  # 首帧对齐
+    prev = torch.where(first, cur, prev)       # 首帧对齐
 
-    env.extras["_stage_prev_progress"] = cur.clone()
+    env.extras["_stage_prev_potential"] = cur.clone()
 
-    delta = potential_shaping(cur, prev, gamma=gamma)
+    delta = gamma * cur - prev                 # γφ_t − φ_{t−1}
     delta = torch.where(first, torch.zeros_like(delta), delta)  # 首帧不给塑形
     scale = (weights or {}).get("progress_shaping", 1.0)
     return (delta * scale) / env.step_dt
@@ -135,17 +134,29 @@ def stage_transition_reward(env, weights: dict | None = None) -> torch.Tensor:
     return bonus / env.step_dt
 
 
-def _mask_active_stages(progress: torch.Tensor) -> torch.Tensor:
-    """把非活动阶段的进度列清零（语义计划驱动塑形）。"""
-    global _active_stages
-    if _active_stages is None:
-        return progress
+def _shaping_potential(env) -> torch.Tensor:
+    """非饱和势能 ``φ = -(d_approach + d_stack)``。
+
+    **回归修复（M1 实验发现）**：旧实现用各阶段进度列之和作势能，其中 approach 列
+    ``clamp(1 - d/0.15)`` 在目标附近**饱和**——靠近目标时随机游走只能降不能升，
+    产生持续的负塑形偏置（200 迭代 mean reward 被拉到 -2.68，agent 学不动）。
+    改用距离势能（非饱和、随接近单调上升），随机游走期望为 0，接近才给正信号。
+
+    语义计划驱动：未规划阶段对应的距离项不参与（如 pick-only 不带 d_stack）。
+    """
+    ee_w, cube_pos, _grasp, _stacked = _stage_signals_from_env(env)
     det = _get_detector()
-    mask = torch.zeros(progress.shape[1], dtype=torch.bool, device=progress.device)
-    for name in _active_stages:
-        if name in det.stages:
-            mask[det.stages.index(name)] = True
-    return progress * mask.float()
+    held = cube_pos[det.cube_to_grasp]
+    base = cube_pos[det.cube_to_stack_on]
+
+    d_app = torch.hypot(ee_w[:, 0] - held[:, 0], ee_w[:, 1] - held[:, 1])
+    d_stack = torch.hypot(ee_w[:, 0] - base[:, 0], ee_w[:, 1] - base[:, 1])
+
+    active = _active_stages
+    use_app = active is None or "approach" in active
+    use_stack = active is None or ("move" in active or "stack" in active)
+    return -(d_app if use_app else torch.zeros_like(d_app)) \
+           - (d_stack if use_stack else torch.zeros_like(d_stack))
 
 
 def build_stage_rewards_cfg(

@@ -23,6 +23,7 @@ def build_stage_env_cfg(
     cube_to_grasp: str | None = None,
     cube_to_stack_on: str | None = None,
     active_stages: list[str] | None = None,
+    stage_rewards: bool = True,
 ):
     """构造带阶段感知奖励的 Isaac 环境配置（**需 Isaac 环境**）。
 
@@ -33,13 +34,12 @@ def build_stage_env_cfg(
         task_id: 任务 id（缺省取 ``settings.task["id_state"]``）
         cube_to_grasp / cube_to_stack_on: 目标方块 / 底座方块（来自语义计划，缺省取 config）
         active_stages: 指令覆盖的活动阶段（语义计划驱动；未覆盖阶段完成奖置 0）
+        stage_rewards: 是否注入阶段感知奖励（False = 保留任务默认奖励，作对照基线）
 
     Returns:
-        Isaac Lab ``ManagerBasedRLEnvCfg``（已注入阶段感知奖励）
+        Isaac Lab ``ManagerBasedRLEnvCfg``（默认注入阶段感知奖励）
     """
     from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
-
-    from ..stages.rewards_isaac import build_stage_rewards_cfg
 
     task_id = task_id or settings.task["id_state"]
     # Isaac Lab 3.0：load_cfg_from_registry(task, "env_cfg_entry_point")
@@ -47,30 +47,35 @@ def build_stage_env_cfg(
     env_cfg.scene.num_envs = num_envs
     env_cfg.seed = seed
 
-    cube_grasp = cube_to_grasp or settings.task["cube_to_grasp"]
-    cube_stack = cube_to_stack_on or settings.task["cube_to_stack_on"]
+    if stage_rewards:
+        from ..stages.rewards_isaac import build_stage_rewards_cfg
+        from ..stages.semantic import filter_stage_weights
 
-    # 语义计划驱动：未覆盖的阶段完成奖置 0（不奖励指令没要求的子阶段）
-    from ..stages.semantic import filter_stage_weights
+        cube_grasp = cube_to_grasp or settings.task["cube_to_grasp"]
+        cube_stack = cube_to_stack_on or settings.task["cube_to_stack_on"]
 
-    weights = filter_stage_weights(settings.reward_weights, settings.stages, active_stages)
+        # 语义计划驱动：未覆盖的阶段完成奖置 0（不奖励指令没要求的子阶段）
+        weights = filter_stage_weights(settings.reward_weights, settings.stages, active_stages)
 
-    # 注入阶段感知稠密奖励（权重/阈值/阶段/目标方块/活动阶段全来自 config+计划）
-    env_cfg.rewards = build_stage_rewards_cfg(
-        weights=weights,
-        thresholds=settings.thresholds,
-        stages=settings.stages,
-        cube_to_grasp=cube_grasp,
-        cube_to_stack_on=cube_stack,
-        active_stages=active_stages,
-    )
+        # 注入阶段感知稠密奖励（权重/阈值/阶段/目标方块/活动阶段全来自 config+计划）
+        env_cfg.rewards = build_stage_rewards_cfg(
+            weights=weights,
+            thresholds=settings.thresholds,
+            stages=settings.stages,
+            cube_to_grasp=cube_grasp,
+            cube_to_stack_on=cube_stack,
+            active_stages=active_stages,
+        )
 
     # rsl_rl 5.x 观测组要求观测项合并为一个张量
     if hasattr(env_cfg.observations, "policy"):
         env_cfg.observations.policy.concatenate_terms = True
 
-    logger.info(
-        "环境配置已注入阶段感知奖励：task=%s num_envs=%d seed=%d 目标=(%s→%s) 活动阶段=%s",
-        task_id, num_envs, seed, cube_grasp, cube_stack, active_stages,
-    )
+    if stage_rewards:
+        logger.info(
+            "环境配置已注入阶段感知奖励：task=%s num_envs=%d seed=%d 目标=(%s→%s) 活动阶段=%s",
+            task_id, num_envs, seed, cube_grasp, cube_stack, active_stages,
+        )
+    else:
+        logger.info("环境配置使用任务默认奖励（基线）：task=%s num_envs=%d seed=%d", task_id, num_envs, seed)
     return env_cfg

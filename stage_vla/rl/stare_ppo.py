@@ -29,6 +29,7 @@ def train_stare(
     num_envs: int | None = None,
     max_iterations: int | None = None,
     headless: bool = True,
+    stage_rewards: bool = True,
 ) -> object:
     """v1：状态版阶段感知 PPO 训练（**需 Isaac 环境**）。
 
@@ -41,6 +42,7 @@ def train_stare(
         instruction: 语言指令（缺省用 config task.desc）
         num_envs / max_iterations: 覆盖 config 的 ppo 节
         headless: 无头模式
+        stage_rewards: 是否注入阶段感知奖励（False = 任务默认奖励，作对照基线）
 
     Returns:
         OnPolicyRunner（训练完成后包含已保存 checkpoint）
@@ -68,13 +70,14 @@ def train_stare(
         cube_to_grasp=cube_grasp,
         cube_to_stack_on=cube_stack,
         active_stages=active_stages,
+        stage_rewards=stage_rewards,
     )
     agent_cfg = build_agent_cfg(ppo_cfg)
 
     logger.info(
-        "StARe-PPO v1 训练启动：%d 环境 / %d 迭代 | 指令=%r 目标=(%s→%s) 活动阶段=%s",
+        "StARe-PPO v1 训练启动：%d 环境 / %d 迭代 | 指令=%r 目标=(%s→%s) 活动阶段=%s 阶段奖励=%s",
         ppo_cfg["num_envs"], ppo_cfg["max_iterations"],
-        instruction, cube_grasp, cube_stack, active_stages,
+        instruction, cube_grasp, cube_stack, active_stages, stage_rewards,
     )
     return train(
         settings.task["id_state"],
@@ -85,7 +88,7 @@ def train_stare(
     )
 
 
-def _build_env_cfg(settings, num_envs: int, *, cube_to_grasp=None, cube_to_stack_on=None, active_stages=None):
+def _build_env_cfg(settings, num_envs: int, *, cube_to_grasp=None, cube_to_stack_on=None, active_stages=None, stage_rewards=True):
     """构造带阶段感知奖励的环境配置（需 Isaac 环境，惰性 import）。"""
     from ..envs.cfg_surgery import build_stage_env_cfg
 
@@ -96,6 +99,7 @@ def _build_env_cfg(settings, num_envs: int, *, cube_to_grasp=None, cube_to_stack
         cube_to_grasp=cube_to_grasp,
         cube_to_stack_on=cube_to_stack_on,
         active_stages=active_stages,
+        stage_rewards=stage_rewards,
     )
 
 

@@ -75,7 +75,7 @@ ppo:
   entropy_coef: 0.01
   desired_kl: 0.01
   max_grad_norm: 1.0
-  init_noise_std: 1.0
+  init_noise_std: 0.3            # 调小随机动作幅度，减少随机游走漂移对塑形的扰动（M1 实验调优）
   actor_hidden_dims: [512, 512, 256]
   critic_hidden_dims: [512, 512, 256]
   activation: "elu"
