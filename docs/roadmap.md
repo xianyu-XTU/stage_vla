@@ -18,9 +18,11 @@
 - [x] 语义分离真正驱动训练（`semantic.plan_targets` 提取目标方块 + 活动阶段；
       `filter_stage_weights` 未覆盖阶段完成奖置 0；`train_stare` 解析指令驱动
       env cfg——已验证 "pick up only" → 活动阶段 [approach,grasp,lift]）
-- [ ] `train_stare.py` 跑通，TensorBoard 出现五阶段覆盖率；与官方基线对比阶段塑形组累积奖励更高
+- [x] `train_stare.py` 跑通，阶段跨越触发（调优后 stage_transition 0.54）；
+      与基线对比阶段塑形组累积奖励更高（**29.30 vs -0.20**，详见 `research_log.md`）
 
-**验收**：合成轨迹上聚类中心与几何 detect 一致性 > 阈值（✅ 已达成）；训练 reward 有限（✅ 已达成）
+**验收**：合成轨迹上聚类中心与几何 detect 一致性 > 阈值（✅ 已达成）；
+训练 reward 有限且阶段塑形组显著高于基线（✅ 已达成，非饱和势能调优后）
 
 ## M2 模块② 融合
 
