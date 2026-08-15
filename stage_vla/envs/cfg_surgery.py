@@ -79,3 +79,55 @@ def build_stage_env_cfg(
     else:
         logger.info("环境配置使用任务默认奖励（基线）：task=%s num_envs=%d seed=%d", task_id, num_envs, seed)
     return env_cfg
+
+
+def build_vision_env_cfg(
+    settings,
+    num_envs: int,
+    seed: int,
+    *,
+    cube_to_grasp: str | None = None,
+    cube_to_stack_on: str | None = None,
+    active_stages: list[str] | None = None,
+    cam_res: int = 128,
+):
+    """构造带相机 + 阶段感知奖励的**视觉**环境配置（M2 VLA 融合用，**需 Isaac 环境**）。
+
+    用 ``id_visuomotor`` 任务（双相机 200×200 RGB + 7 维 IK-Rel 动作）：
+    - 相机降分辨率到 ``cam_res``（8GB 显存省渲染）；
+    - 注入阶段感知奖励；
+    - **保持嵌套观测**（图像不能拼进状态向量，不设 ``concatenate_terms``）。
+    """
+    from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+
+    from ..stages.rewards_isaac import build_stage_rewards_cfg
+    from ..stages.semantic import filter_stage_weights
+
+    task_id = settings.task["id_visuomotor"]
+    env_cfg = load_cfg_from_registry(task_id, "env_cfg_entry_point")
+    env_cfg.scene.num_envs = num_envs
+    env_cfg.seed = seed
+
+    cube_grasp = cube_to_grasp or settings.task["cube_to_grasp"]
+    cube_stack = cube_to_stack_on or settings.task["cube_to_stack_on"]
+    weights = filter_stage_weights(settings.reward_weights, settings.stages, active_stages)
+    env_cfg.rewards = build_stage_rewards_cfg(
+        weights=weights,
+        thresholds=settings.thresholds,
+        stages=settings.stages,
+        cube_to_grasp=cube_grasp,
+        cube_to_stack_on=cube_stack,
+        active_stages=active_stages,
+    )
+
+    # 相机降分辨率（省显存；不做 concatenate，图像观测保持 dict）
+    for cam in ("table_cam", "wrist_cam"):
+        if hasattr(env_cfg.scene, cam):
+            setattr(getattr(env_cfg.scene, cam), "height", cam_res)
+            setattr(getattr(env_cfg.scene, cam), "width", cam_res)
+
+    logger.info(
+        "视觉环境配置就绪：task=%s num_envs=%d seed=%d cam_res=%d 目标=(%s→%s) 活动阶段=%s",
+        task_id, num_envs, seed, cam_res, cube_grasp, cube_stack, active_stages,
+    )
+    return env_cfg

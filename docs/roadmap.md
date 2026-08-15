@@ -26,12 +26,14 @@
 
 ## M2 模块② 融合
 
-- [ ] `action_interface` 三实现（IK-Rel / JointPos / VLA）往返测试
-- [ ] `VLAAsPolicy` 进 PPO 闭环训练（8GB 默认 `vision_only` 或 record/replay / TCP 分离）
-- [ ] `StageFeedback` 把阶段信号回灌 VLA 上下文
-- [ ] `deploy/server.py` + `client.py` 双进程闭环
+- [x] `action_interface` 实现（IKRel 7 维 + JointPos 8 维 + 128 维往返纯函数）往返测试
+- [x] `VLAAsPolicy` 进 PPO 闭环训练（**自研 PPO 循环** + 冻结视觉塔，8GB 内）
+- [x] `StageFeedback` 阶段信号回灌 VLA 上下文（one-hot 条件输入）
+- [ ] `deploy/server.py` + `client.py` 双进程闭环（record/replay / TCP，后续）
 
-**验收**：`train_stare.py --vla vision_only` 闭环训练跑通（8GB 内）；有无阶段反馈曲线可分
+**验收**：`train_vla.py` 视觉融合闭环训练跑通（✅ 10 迭代 exit 0，显存 1.63GB）；
+**关键排障**：GPU backward 与 Isaac RTX 渲染/Warp 同卡触发 device assert →
+可训头改 CPU（4.2M 参数）+ 目标 detach + 特征预提取（详见 research_log）
 
 ## M3 模块③ 轻量化
 

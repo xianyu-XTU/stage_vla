@@ -88,11 +88,14 @@ class IKRelActionInterface(ActionOutputInterface):
     action_dim = 7
 
     def to_env_action(self, vla_action: np.ndarray | torch.Tensor) -> torch.Tensor:
-        """[N,7] → [N,7]：6 维末端增量直通，夹爪符号 → 二进制 ±1（匹配 BinaryJointPositionActionCfg）。"""
+        """[N,7] → [N,7]：6 维末端增量**夹到 [-1,1]**（IK-Rel 环境期望归一化动作，
+        未夹的随机策略输出会让物理仿真爆掉——M2 实测 CUDA device assert）；
+        夹爪符号 → 二进制 ±1（匹配 BinaryJointPositionActionCfg）。"""
         a = torch.as_tensor(vla_action, dtype=torch.float32)
         if a.dim() == 1:
             a = a.unsqueeze(0)
         out = a.clone()
+        out[:, :6] = a[:, :6].clamp(min=-1.0, max=1.0)   # IK 增量限幅
         out[:, 6] = torch.sign(a[:, 6]).clamp(min=-1.0, max=1.0)  # 夹爪：>0 开 / <0 夹
         return out
 

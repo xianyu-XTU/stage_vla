@@ -124,7 +124,10 @@ class VisionFeatureExtractor(FeatureExtractor):
         """图像 ``[H,W,3]`` uint8 或 ``[B,H,W,3]`` → ``[B, 2*llm_dim]`` 冻结特征。"""
         import numpy as np
 
-        arr = np.asarray(image, dtype=np.uint8)
+        if torch.is_tensor(image):
+            arr = image.detach().cpu().numpy()
+        else:
+            arr = np.asarray(image, dtype=np.uint8)
         if arr.ndim == 3:
             arr = arr[None]
         batch = []
@@ -232,8 +235,8 @@ class VisionOnlyPPOPolicy(VLAAsPolicy):
         self.actor_head = _MLPHead(head_in, action_dim, hidden)
         self.critic_head = _MLPHead(head_in, 1, hidden)
         self.log_std = nn.Parameter(torch.full((action_dim,), init_log_std))
-        if device is not None:
-            self.to(device)
+        # 头常驻 CPU（见 _head_input 注释）；feature_extractor 自带设备（GPU 视觉塔）
+        self._device_hint = device  # 保留参数兼容；实际头在 CPU
 
     # ------------------------------------------------------------------
     # 特征 + 阶段反馈 → 头输入
@@ -245,7 +248,9 @@ class VisionOnlyPPOPolicy(VLAAsPolicy):
         if stage_feedback is not None:
             fb = torch.as_tensor(stage_feedback, dtype=torch.float32).to(x.device)
             x = torch.cat([x, fb], dim=-1)
-        return x
+        # 可训练头**常驻 CPU**（M2 实测：GPU backward 与 Isaac RTX 渲染/Warp 同卡触发
+        # device assert；头仅 4.2M 参数，CPU 足够快）。特征由冻结视觉塔在 GPU 计算后 detach。
+        return x.detach().cpu()
 
     def _distribution(self, x: torch.Tensor):
         mean = self.actor_head(x)
@@ -265,12 +270,35 @@ class VisionOnlyPPOPolicy(VLAAsPolicy):
 
     def evaluate_actions(self, obs, action, stage_feedback=None):
         x = self._head_input(obs, stage_feedback)
+        return self.evaluate_x(x, action)
+
+    # ------------------------------------------------------------------
+    # 预提取特征模式（PPO 循环用：一次视觉前向，多次头更新，省显存/耗时）
+    # ------------------------------------------------------------------
+    def features(self, obs, stage_feedback=None) -> torch.Tensor:
+        """提取头输入 ``x = 特征 + 阶段反馈``，供预存储与多次更新复用。"""
+        return self._head_input(obs, stage_feedback)
+
+    def sample_from_x(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """对预提取的 ``x`` 采样动作（action, log_prob, value）。"""
         dist = self._distribution(x)
-        a = torch.as_tensor(action, dtype=torch.float32)
+        action = dist.sample()
+        log_prob = dist.log_prob(action).sum(dim=-1)
+        value = self.critic_head(x).squeeze(-1)
+        return action, log_prob, value
+
+    def evaluate_x(self, x: torch.Tensor, action: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """对预提取的 ``x`` 评估动作（log_prob, entropy, value）。"""
+        dist = self._distribution(x)
+        a = torch.as_tensor(action, dtype=torch.float32).to(x.device)
         log_prob = dist.log_prob(a).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
         value = self.critic_head(x).squeeze(-1)
         return log_prob, entropy, value
+
+    def value_x(self, x: torch.Tensor) -> torch.Tensor:
+        """对预提取的 ``x`` 计算价值。"""
+        return self.critic_head(x).squeeze(-1)
 
     def trainable_parameters(self):
         """只训练动作/价值头与 log_std（冻结特征提取器）。"""

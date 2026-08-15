@@ -80,6 +80,17 @@ def _stage_signals_from_env(env) -> tuple[torch.Tensor, dict[str, torch.Tensor],
     return ee_w, cube_pos, grasp, stacked
 
 
+def detect_stage_from_env(env) -> torch.Tensor:
+    """从 Isaac 环境检测当前阶段索引 ``[N]``（PPO 循环 / StageFeedback 用）。"""
+    det = _get_detector()
+    ee_w, cube_pos, grasp, stacked = _stage_signals_from_env(env)
+    return calculator.signals_to_stage(
+        ee_w, cube_pos, grasp, stacked,
+        stages=det.stages, thresholds=det.thresholds,
+        cube_to_grasp=det.cube_to_grasp, cube_to_stack_on=det.cube_to_stack_on,
+    )
+
+
 def compute_stage_progress(env) -> torch.Tensor:
     """计算当前各阶段完成度 ``[N, n_stages]``（Isaac Lab 环境）。"""
     ee_w, cube_pos, grasp, stacked = _stage_signals_from_env(env)

@@ -44,6 +44,25 @@ def create_env(task_id: str, env_cfg, headless: bool = True):
     return RslRlVecEnvWrapper(env), simulation_app
 
 
+def create_raw_env(task_id: str, env_cfg, headless: bool = True, enable_cameras: bool = False):
+    """启动 Isaac Sim → 创建**原始**环境（不套 rsl_rl wrapper，保留嵌套观测）。
+
+    M2 VLA 融合用：图像观测保持 dict，且不用 rsl_rl 的 MLP actor。
+    ``enable_cameras``：含相机传感器的环境必须开启渲染（否则报
+    "A camera was spawned without the --enable_cameras flag"）。
+    Returns:
+        (raw_env, simulation_app) —— ``env.step`` 返回 gymnasium 5 元组。
+    """
+    import gymnasium as gym
+    from isaaclab.app import AppLauncher
+
+    app_launcher = AppLauncher({"headless": headless, "enable_cameras": enable_cameras})
+    simulation_app = app_launcher.app
+
+    env = gym.make(task_id, cfg=env_cfg)
+    return env, simulation_app
+
+
 def build_agent_cfg(ppo_cfg: dict, overrides: dict | None = None):
     """构造 rsl_rl 5.x PPO runner 配置并做废弃字段迁移。"""
     import importlib.metadata as metadata

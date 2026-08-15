@@ -9,10 +9,12 @@
 
 | 组件 | 文件 | 状态 |
 |---|---|---|
-| PPO 训练运行器（rsl_rl 5.x） | `rl/runner.py` + `rl/cfg.py` | ⏳ M1（v1 状态版） |
-| StARe-PPO 入口（v1 / v2 预留） | `rl/stare_ppo.py` | v1 入口已设计；v2 `VLAAsPolicy` 预留 |
-| 动作输出接口（VLA ↔ 环境动作） | `rl/action_interface.py` | ⏳ M2 |
-| 在线反馈循环 | `rl/online_feedback.py` | ⏳ M2 |
+| PPO 训练运行器（rsl_rl 5.x，v1 状态版） | `rl/runner.py` + `rl/cfg.py` | ✅ M1 |
+| **VLA-as-policy 融合训练（自研 PPO 循环）** | `rl/ppo_loop.py` | ✅ M2（视觉融合 10 迭代跑通，显存 1.63GB） |
+| VLAAsPolicy 接口 + VisionOnlyPPOPolicy | `rl/vla_policy.py` | ✅ M2（冻结视觉塔 + CPU 可训头） |
+| 动作输出接口（VLA ↔ 环境动作） | `rl/action_interface.py` | ✅ M2（IKRel/JointPos + 128 维往返） |
+| 阶段反馈回灌 | `rl/online_feedback.py` | ✅ M2（StageFeedback → one-hot 条件输入） |
+| 视觉环境配置（id_visuomotor + 阶段奖励） | `envs/cfg_surgery.py` | ✅ M2 |
 | 策略注册/按名构造 | `policies/factory.py` + `core/registry.py` | ✅ |
 
 ## 8GB 显存铁律
