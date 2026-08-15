@@ -24,6 +24,7 @@ outputs/
 
 # 日志 / 实验
 *.log
+logs/
 runs/
 wandb/
 
