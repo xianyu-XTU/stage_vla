@@ -100,9 +100,14 @@ def train_plan_decoder(model: VisionPrimitivePolicy, epochs: int = 60, lr: float
 # ============================================================================
 # 阶段 2：视觉引导器
 # ============================================================================
-def train_vision_grounder(model: VisionPrimitivePolicy, iters: int = 300, horizon: int = 24,
+def train_vision_grounder(model: VisionPrimitivePolicy, iters: int = 60, horizon: int = 24,
                           num_envs: int = 4, lr: float = 1e-3, cam_res: int = 96, device: str = "cuda"):
-    """仿真 rollout 采集 (图像, 当前阶段)，训练 primitive_head 分类。"""
+    """仿真 rollout 采集 (图像, 当前阶段)，训练 primitive_head 分类。
+
+    注意：随机动作下阶段分布可能偏斜（多为 approach），报告逐阶段分布以便诚实评估。
+    """
+    from collections import Counter
+
     from stage_vla.envs.cfg_surgery import build_vision_env_cfg
     from stage_vla.rl.runner import create_raw_env
     from stage_vla.stages.rewards_isaac import detect_stage_from_env
@@ -116,15 +121,17 @@ def train_vision_grounder(model: VisionPrimitivePolicy, iters: int = 300, horizo
     loss_fn = torch.nn.CrossEntropyLoss()
     env_dev = env.unwrapped.device
 
-    print(f"[phase2] 训练视觉引导器：{iters} iter × {horizon} 步 × {num_envs} env")
+    print(f"[phase2] 训练视觉引导器：{iters} iter × {horizon} 步 × {num_envs} env", flush=True)
     obs, _ = env.reset()
     for it in range(iters):
-        total, correct = 0.0, 0
+        total, correct, n = 0.0, 0, 0
+        stage_counts = Counter()
         for _ in range(horizon):
             # 随机（限幅）动作让机械臂动起来，采集当前阶段的图像
             action = (torch.rand(env.action_space.shape, device=env_dev) * 2 - 1) * 0.3
             obs, rew, term, trunc, _ = env.step(action)
             stage = detect_stage_from_env(env.unwrapped)              # [N] 当前阶段（老师）
+            stage_counts.update(stage.tolist())
 
             img = obs["policy"]["table_cam"]
             with torch.no_grad():
@@ -135,12 +142,14 @@ def train_vision_grounder(model: VisionPrimitivePolicy, iters: int = 300, horizo
             opt.zero_grad(); loss.backward(); opt.step()
             total += loss.item()
             correct += (logits.argmax(-1) == stage.to(device)).sum().item()
+            n += num_envs
             # 重置终止的环境
             if bool((term | trunc).any()):
                 obs, _ = env.reset()
-        acc = correct / (horizon * num_envs)
-        if it % 25 == 0 or it == iters - 1:
-            print(f"  iter {it:>3d} | loss {total/horizon:.4f} | acc {acc:.3f}")
+        acc = correct / n
+        if it % 10 == 0 or it == iters - 1:
+            print(f"  iter {it:>3d} | loss {total/horizon:.4f} | acc {acc:.3f} | "
+                  f"阶段分布 {dict(sorted(stage_counts.items()))}", flush=True)
     env.close()
     sim_app.close()
 

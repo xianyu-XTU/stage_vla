@@ -59,6 +59,9 @@ class VisionPrimitivePolicy(nn.Module):
     # ------------------------------------------------------------------
     def _fuse(self, image, instr_emb: torch.Tensor, step_idx) -> torch.Tensor:
         visual = self.vision(image)                                   # [B, 4096]
+        # 单条指令 × 多环境图像 → 广播指令嵌入到 batch
+        if instr_emb.shape[0] == 1 and visual.shape[0] > 1:
+            instr_emb = instr_emb.expand(visual.shape[0], -1)
         step_ctx = self._step_onehot(step_idx, visual.shape[0], visual.device)  # [B, plan_len]
         return torch.cat([visual, instr_emb, step_ctx], dim=1)        # [B, fused_in]
 
