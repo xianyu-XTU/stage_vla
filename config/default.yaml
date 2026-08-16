@@ -48,6 +48,7 @@ thresholds:
   grasp_reward_thresh: 0.5 # 抓取布尔信号阈值
   lift_height: 0.06        # 方块抬离桌面高度阈值
   place_align_dist: 0.05   # 与底座方块水平对齐阈值
+  lift_min_height: 0.04    # 方块被抬起判定阈值（root z > 此值 = 已离桌面）
 
 # ---------- 阶段感知奖励权重 ----------
 # 键名与 stages 一一对应；stage_transition 在跨入新阶段时一次性给
@@ -59,6 +60,7 @@ reward_weights:
   lift: 1.0                # 抬起完成
   move: 0.5                # 移动对齐完成
   stack: 10.0              # 堆叠完成（最终目标）
+  lift_object: 15.0        # 方块被抬起(高于阈值)每步重奖 —— 官方 Isaac-Lift 机制，驱动真抓取
 
 # ---------- PPO 训练超参（rsl_rl 5.x） ----------
 ppo:

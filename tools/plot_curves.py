@@ -27,6 +27,7 @@ METRICS = {
     "mean_reward": re.compile(r"Mean reward:\s+([-\d.]+)"),
     "stage_progress": re.compile(r"Episode_Reward/stage_progress:\s+([-\d.]+)"),
     "stage_transition": re.compile(r"Episode_Reward/stage_transition:\s+([-\d.]+)"),
+    "lifting_object": re.compile(r"Episode_Reward/lifting_object:\s+([-\d.]+)"),
     "success": re.compile(r"Episode_Termination/success:\s+([\d.]+)"),
 }
 
@@ -58,8 +59,12 @@ def main() -> int:
     import matplotlib.pyplot as plt
 
     iters = range(n)
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("StARe-PPO Training Curves (Stage-Aware RL, 400 iters)", fontsize=14)
+    n_plots = len(plots)
+    ncols = 2
+    nrows = (n_plots + 1) // 2
+    fig, axes = plt.subplots(nrows, ncols, figsize=(12, 4 * nrows), squeeze=False)
+    fig.suptitle("StARe-PPO Training Curves (Stage-Aware RL + Lift Reward)", fontsize=14)
+    axes = [ax for row in axes for ax in row]  # 展平
 
     def smooth(xs, window=10):
         if len(xs) < window:
@@ -68,12 +73,18 @@ def main() -> int:
         a = np.convolve(xs, np.ones(window) / window, mode="valid")
         return a.tolist()
 
-    plots = [
+    # 动态选择有数据的指标（优先显示核心项）
+    all_plots = [
         ("mean_reward", "Mean reward", "cumulative reward"),
-        ("stage_progress", "stage_progress", "potential shaping"),
         ("stage_transition", "stage_transition", "stage transitions"),
+        ("lifting_object", "lifting_object", "cube lifted reward"),
+        ("stage_progress", "stage_progress", "potential shaping"),
         ("success", "success rate", "success"),
     ]
+    plots = [(k, t, y) for k, t, y in all_plots if data.get(k)]
+    if not plots:
+        print("[plot] 无可用指标")
+        return 0
     for ax, (key, title, ylabel) in zip(axes.flat, plots):
         vals = data[key]
         if not vals:

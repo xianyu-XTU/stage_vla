@@ -164,6 +164,19 @@ def stage_transition_reward(env, weights: dict | None = None) -> torch.Tensor:
     return bonus / env.step_dt
 
 
+def object_is_lifted_reward(env, minimal_height: float = 0.04) -> torch.Tensor:
+    """方块被抬起奖励（官方 Isaac-Lift 机制）：目标方块 root z > 阈值 → 1.0。
+
+    **关键**：这是驱动策略真正"抓起并抬走"方块的核心稠密信号（官方 weight 15）。
+    我们的阶段奖励原本没有这个"方块实际被抬起"的项——策略只学跨阶段信号，
+    从没被要求真的把方块抬离桌面。
+    """
+    env = getattr(env, "unwrapped", env)
+    det = _get_detector()
+    cube = env.scene[det.cube_to_grasp].data.root_pos_w
+    return torch.where(cube[:, 2] > minimal_height, 1.0, 0.0)
+
+
 def _shaping_potential(env) -> torch.Tensor:
     """非饱和势能 ``φ = -(d_approach + d_stack)``。
 
@@ -237,6 +250,11 @@ def build_stage_rewards_cfg(
             func=stage_transition_reward,
             params={"weights": weights},
             weight=1.0,
+        )
+        lifting_object = RewardTerm(
+            func=object_is_lifted_reward,
+            params={"minimal_height": (thresholds or {}).get("lift_min_height", 0.04)},
+            weight=weights.get("lift_object", 15.0),
         )
 
     return StageRewardsCfg()
