@@ -58,9 +58,10 @@ class VisionFeatureExtractor(FeatureExtractor):
     指令嵌入来自 ``paths.lang_embed``（T5 预编码，固定指令）。
     """
 
-    def __init__(self, settings, device: str = "cuda"):
+    def __init__(self, settings, device: str = "cuda", include_lang: bool = True):
         super().__init__()
         self.device = device
+        self.include_lang = include_lang
         self._load(settings)
 
     # ------------------------------------------------------------------
@@ -106,18 +107,22 @@ class VisionFeatureExtractor(FeatureExtractor):
 
         self.image_processor = PrismaticImageProcessor.from_pretrained(str(openvla_model))
 
-        # 指令嵌入（兼容 [L,4096] 与 [1,L,4096]），均值池化 → [1, llm_dim]
-        lang = torch.load(str(lang_embed_path), map_location="cpu")
-        emb = lang["embeddings"].to(self.device)
-        if emb.dim() == 3:
-            emb = emb.mean(dim=1)
-        else:
-            emb = emb.mean(dim=0)
-        self.lang_embed = emb.unsqueeze(0)
+        self.llm_dim = int(meta["llm_dim"])
 
-        self.features_dim = 2 * int(meta["llm_dim"])
-        print(f"[VisionFeatureExtractor] 就绪: features_dim={self.features_dim}, "
-              f"显存 {torch.cuda.memory_allocated()/1e9:.2f}GB")
+        # 指令嵌入（可选）：兼容 [L,4096] 与 [1,L,4096]，均值池化 → [1, llm_dim]
+        if self.include_lang:
+            lang = torch.load(str(lang_embed_path), map_location="cpu")
+            emb = lang["embeddings"].to(self.device)
+            if emb.dim() == 3:
+                emb = emb.mean(dim=1)
+            else:
+                emb = emb.mean(dim=0)
+            self.lang_embed = emb.unsqueeze(0)
+
+        # 纯视觉 = llm_dim；带预编码指令 = 2*llm_dim
+        self.features_dim = (2 if self.include_lang else 1) * self.llm_dim
+        print(f"[VisionFeatureExtractor] 就绪: features_dim={self.features_dim} "
+              f"(include_lang={self.include_lang}), 显存 {torch.cuda.memory_allocated()/1e9:.2f}GB")
 
     # ------------------------------------------------------------------
     def forward(self, image) -> torch.Tensor:
@@ -141,8 +146,11 @@ class VisionFeatureExtractor(FeatureExtractor):
             feats = self.vision_backbone(pixel_values)       # [B, N, vis_dim]
             proj = self.projector(feats)                     # [B, N, llm_dim]
             visual = proj.mean(dim=1).float()                # [B, llm_dim]
-            lang = self.lang_embed.float().expand(visual.shape[0], -1)  # [B, llm_dim]
-            out = torch.cat([visual, lang], dim=1)           # [B, 2*llm_dim]
+            if self.include_lang:
+                lang = self.lang_embed.float().expand(visual.shape[0], -1)  # [B, llm_dim]
+                out = torch.cat([visual, lang], dim=1)       # [B, 2*llm_dim]
+            else:
+                out = visual                                # [B, llm_dim]（纯视觉，指令由外部编码）
         return out
 
 
