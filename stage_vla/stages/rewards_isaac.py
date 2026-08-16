@@ -177,6 +177,63 @@ def object_is_lifted_reward(env, minimal_height: float = 0.04) -> torch.Tensor:
     return torch.where(cube[:, 2] > minimal_height, 1.0, 0.0)
 
 
+def object_grasped_reward(env) -> torch.Tensor:
+    """抓取奖励（分阶段 RL 用）：目标方块被抓取 → 1.0。"""
+    from isaaclab.managers import SceneEntityCfg
+    from isaaclab_tasks.manager_based.manipulation.stack import mdp
+
+    env = getattr(env, "unwrapped", env)
+    det = _get_detector()
+    return mdp.object_grasped(
+        env,
+        robot_cfg=SceneEntityCfg("robot"),
+        ee_frame_cfg=SceneEntityCfg("ee_frame"),
+        object_cfg=SceneEntityCfg(det.cube_to_grasp),
+    ).float()
+
+
+def object_near_goal_reward(env, std: float = 0.1, object_cfg: str | None = None) -> torch.Tensor:
+    """移动奖励（分阶段 RL 用）：目标方块靠近底座方块 → 1 - tanh(距离/std)。"""
+    env = getattr(env, "unwrapped", env)
+    det = _get_detector()
+    cube = env.scene[det.cube_to_grasp].data.root_pos_w
+    goal = env.scene[det.cube_to_stack_on].data.root_pos_w
+    d = torch.linalg.norm(cube[:, :2] - goal[:, :2], dim=1)   # 水平距离
+    return 1.0 - torch.tanh(d / std)
+
+
+def object_stacked_reward(env) -> torch.Tensor:
+    """堆叠奖励（分阶段 RL 用）：方块成功堆叠 → 1.0。"""
+    from isaaclab.managers import SceneEntityCfg
+    from isaaclab_tasks.manager_based.manipulation.stack import mdp
+
+    env = getattr(env, "unwrapped", env)
+    det = _get_detector()
+    return mdp.object_stacked(
+        env,
+        robot_cfg=SceneEntityCfg("robot"),
+        upper_object_cfg=SceneEntityCfg(det.cube_to_grasp),
+        lower_object_cfg=SceneEntityCfg(det.cube_to_stack_on),
+    ).float()
+
+
+def object_stacked_dense_reward(env, std_xy: float = 0.08, std_z: float = 0.03,
+                                cube_height: float = 0.05) -> torch.Tensor:
+    """稠密堆叠奖励（分阶段 RL 用，替代稀疏 object_stacked）。
+
+    奖励 = 水平对齐(1-tanh(d_xy/std)) × 高度对齐(1-tanh(d_z/std))，
+    两个都接近才高——给策略连续梯度引导"把方块搬到目标正上方且到堆叠高度"。
+    """
+    env = getattr(env, "unwrapped", env)
+    det = _get_detector()
+    cube = env.scene[det.cube_to_grasp].data.root_pos_w
+    base = env.scene[det.cube_to_stack_on].data.root_pos_w
+    d_xy = torch.linalg.norm(cube[:, :2] - base[:, :2], dim=1)
+    z_target = base[:, 2] + cube_height               # 方块要落在底座方块顶部
+    d_z = torch.abs(cube[:, 2] - z_target)
+    return (1.0 - torch.tanh(d_xy / std_xy)) * (1.0 - torch.tanh(d_z / std_z))
+
+
 def _shaping_potential(env) -> torch.Tensor:
     """非饱和势能 ``φ = -(d_approach + d_stack)``。
 
