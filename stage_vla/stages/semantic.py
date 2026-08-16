@@ -38,6 +38,8 @@ ACTION_KEYWORDS: dict[str, list[str]] = {
     "place on": ["move", "stack"],
     "place": ["move", "stack"],
     "stack": ["move", "stack"],
+    "put it on": ["move", "stack"],   # "put it on"（it 隔开，需单独关键词）
+    "put onto": ["move", "stack"],
     "put on": ["move", "stack"],
 }
 

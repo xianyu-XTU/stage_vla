@@ -97,7 +97,15 @@ class VisionPrimitivePolicy(nn.Module):
             mask = torch.tensor(params_mask(PRIMITIVES[pid].name), dtype=out["params"].dtype,
                                 device=out["params"].device)
             params.append((out["params"][b] * mask).tolist())
-        plan = [[PRIMITIVES[i].name for i in row] for row in out["plan_logits"].argmax(dim=-1).tolist()]
+        # 计划解码：读到 STOP（index == n_primitives）即止
+        plan = []
+        for row in out["plan_logits"].argmax(dim=-1).tolist():
+            p = []
+            for i in row:
+                if i == self.n_primitives:
+                    break
+                p.append(PRIMITIVES[i].name)
+            plan.append(p)
         return names, params, plan
 
     def param_report(self) -> dict:
