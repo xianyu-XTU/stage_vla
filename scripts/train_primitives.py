@@ -154,13 +154,55 @@ def train_vision_grounder(model: VisionPrimitivePolicy, iters: int = 60, horizon
     sim_app.close()
 
 
+def train_vision_grounder_data(model: VisionPrimitivePolicy, epochs: int = 150, lr: float = 1e-3,
+                               data_path: str = "outputs/primitive_data.pt", device: str = "cuda"):
+    """用脚本化采集的均衡 (图像, 阶段) 数据训练 primitive_head（无需 Isaac）。
+
+    视觉特征 + 指令嵌入一次预提取，随后快速分类训练；报告逐阶段准确率。
+    """
+    from collections import Counter
+
+    data = torch.load(_ROOT / data_path, map_location="cpu", weights_only=False)
+    imgs = data["images"]                    # [N, 96, 96, 3] uint8
+    stages = torch.tensor(data["stages"], dtype=torch.long)
+    dist = dict(sorted(Counter(stages.tolist()).items()))
+    print(f"[phase2-data] 加载 {len(imgs)} 张，分布 {dist}", flush=True)
+
+    instr = "pick up the red cube and place it on the blue cube"
+    with torch.no_grad():
+        feats = [model.vision(imgs[i:i + 8]) for i in range(0, len(imgs), 8)]
+        feats = torch.cat(feats).to(device)                # [N, 4096]
+        instr_emb = model.instruction_tokenizer(instr).to(device)   # [1, 512]
+    N = feats.shape[0]
+    step_ctx = model._step_onehot(0, N, feats.device)      # 常量上下文（分类靠视觉）
+    fused = torch.cat([feats, instr_emb.expand(N, -1), step_ctx], dim=1)
+
+    opt = torch.optim.Adam(model.primitive_head.parameters(), lr=lr)
+    loss_fn = torch.nn.CrossEntropyLoss()
+    for epoch in range(epochs):
+        perm = torch.randperm(N)
+        for i in range(0, N, 8):
+            idx = perm[i:i + 8]
+            logits = model.primitive_head(fused[idx])
+            loss = loss_fn(logits, stages[idx].to(device))
+            opt.zero_grad(); loss.backward(); opt.step()
+        if epoch % 25 == 0 or epoch == epochs - 1:
+            with torch.no_grad():
+                pred = model.primitive_head(fused).argmax(-1)
+                acc = (pred == stages.to(device)).float().mean().item()
+                per_stage = [(s, ((pred == s) & (stages.to(device) == s)).float().mean().item())
+                             for s in range(5)]
+            print(f"  epoch {epoch:>3d} | loss {loss.item():.4f} | acc {acc:.3f} | 逐阶段 {per_stage}", flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="训练基础动作策略（计划解码器 + 视觉引导器）")
-    parser.add_argument("--phase", choices=["plan", "grounder", "all"], default="all")
+    parser.add_argument("--phase", choices=["plan", "grounder", "grounder_data", "all"], default="all")
     parser.add_argument("--plan_epochs", type=int, default=60)
     parser.add_argument("--iters", type=int, default=300)
     parser.add_argument("--num_envs", type=int, default=4)
     parser.add_argument("--cam_res", type=int, default=96)
+    parser.add_argument("--grounder_epochs", type=int, default=150)
     args = parser.parse_args()
 
     settings = load_settings()
@@ -168,8 +210,10 @@ def main() -> int:
 
     if args.phase in ("plan", "all"):
         train_plan_decoder(model, epochs=args.plan_epochs)
-    if args.phase in ("grounder", "all"):
+    if args.phase == "grounder":
         train_vision_grounder(model, iters=args.iters, num_envs=args.num_envs, cam_res=args.cam_res)
+    if args.phase in ("grounder_data", "all"):
+        train_vision_grounder_data(model, epochs=args.grounder_epochs)
 
     # 保存
     torch.save({k: v.cpu() for k, v in model.state_dict().items()}, "outputs/primitives_model.pt")
