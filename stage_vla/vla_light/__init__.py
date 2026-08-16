@@ -13,5 +13,16 @@ OpenVLA 用 Llama-2 7B 因果 LM 既理解指令又自回归生成动作 token�
 
 from .instruction_tokenizer import InstructionTokenizer
 from .model import OpenVLALightForAction
+from .planner import PlanDecoder, semantic_plan
+from .primitives import PRIMITIVES, PRIMITIVE_NAMES
+from .vision_policy import VisionPrimitivePolicy
 
-__all__ = ["InstructionTokenizer", "OpenVLALightForAction"]
+__all__ = [
+    "InstructionTokenizer",
+    "OpenVLALightForAction",
+    "PlanDecoder",
+    "PRIMITIVES",
+    "PRIMITIVE_NAMES",
+    "VisionPrimitivePolicy",
+    "semantic_plan",
+]
