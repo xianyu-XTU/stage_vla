@@ -18,7 +18,12 @@ import torch
 
 from . import calculator
 from .detector import StageDetector
-from .rewards import first_frame_mask, potential_shaping, stage_completion_reward
+from .rewards import (
+    first_frame_mask,
+    potential_shaping,
+    stage_completion_reward,
+    stage_completion_reward_first_time,
+)
 
 # 模块级缓存的阶段检测器（避免每个 reward 调用重建）
 _detector: StageDetector | None = None
@@ -124,7 +129,11 @@ def stage_potential_reward(env, weights: dict | None = None, gamma: float = 0.99
 
 
 def stage_transition_reward(env, weights: dict | None = None) -> torch.Tensor:
-    """阶段完成奖励（Isaac Lab RewardTerm，func(env, **params) -> [N]）。首帧置零。"""
+    """阶段完成奖励（Isaac Lab RewardTerm，func(env, **params) -> [N]）。首帧置零。
+
+    **防奖励黑客**：每个阶段每 episode 只奖励首次进入（用 ``_stage_done`` 掩码），
+    杜绝"反复跨阶段刷完成奖"（M2 长训练诊断：stage_transition 峰值 21 而 success=0）。
+    """
     det = _get_detector()
     ee_w, cube_pos, grasp, stacked = _stage_signals_from_env(env)
     cur_stage = calculator.signals_to_stage(
@@ -140,7 +149,17 @@ def stage_transition_reward(env, weights: dict | None = None) -> torch.Tensor:
 
     env.extras["_stage_prev_stage"] = cur_stage.clone()
 
-    bonus = stage_completion_reward(cur_stage, prev, weights or {}, det.stages)
+    # 已奖励阶段掩码（reset 首帧清零）
+    done = env.extras.get("_stage_done")
+    if done is None:
+        done = torch.zeros(cur_stage.shape[0], len(det.stages), dtype=torch.bool, device=cur_stage.device)
+    else:
+        done = done.to(cur_stage.device)
+    done = torch.where(first.unsqueeze(1), torch.zeros_like(done), done)
+
+    bonus, new_done = stage_completion_reward_first_time(cur_stage, prev, done, weights or {}, det.stages)
+    env.extras["_stage_done"] = new_done
+
     bonus = torch.where(first, torch.zeros_like(bonus), bonus)
     return bonus / env.step_dt
 

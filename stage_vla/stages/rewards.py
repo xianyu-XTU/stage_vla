@@ -73,3 +73,36 @@ def first_frame_mask(episode_length_buf: torch.Tensor) -> torch.Tensor:
         [N] bool
     """
     return episode_length_buf == 1
+
+
+def stage_completion_reward_first_time(
+    stage: torch.Tensor,
+    prev_stage: torch.Tensor,
+    done: torch.Tensor,
+    weights: dict,
+    stages: list[str],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """阶段完成奖励，**每个阶段每 episode 只奖励首次进入**（防奖励黑客）。
+
+    背景（M2 长训练诊断）：原实现每次跨阶段都发完成奖，策略学会反复
+    "抓了又掉、掉了再抓" 刷阶段完成奖（stage_transition 峰值 21 vs 正常 ~4），
+    却从不真正完成堆叠（success=0）。本函数用 ``done`` 掩码只奖励首次。
+
+    Args:
+        stage: [N] 当前阶段索引
+        prev_stage: [N] 上一步阶段索引
+        done: [N, K] bool，本 episode 已奖励过的阶段
+        weights: 阶段完成权重（键为阶段名）
+        stages: 阶段名列表
+
+    Returns:
+        (bonus [N], new_done [N, K])
+    """
+    bonus = torch.zeros_like(stage, dtype=torch.float)
+    new_done = done.clone()
+    for level, name in enumerate(stages):
+        entered = (level > prev_stage) & (level <= stage) & (~done[:, level])   # [N]
+        bonus = bonus + entered.float() * weights[name]
+        # 只更新该列（[N] 不能直接 | 到 [N,K]，否则会广播成整行全 True 的 bug）
+        new_done[:, level] = new_done[:, level] | entered
+    return bonus, new_done
