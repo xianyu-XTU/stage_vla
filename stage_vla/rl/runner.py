@@ -87,11 +87,16 @@ def train(
     max_iterations: int,
     headless: bool = True,
     log_root: Path | None = None,
+    init_ckpt: Path | None = None,
 ):
     """执行 PPO 训练（OnPolicyRunner.learn）。
 
     rsl_rl 5.x 的 ``OnPolicyRunner`` 期望 ``train_cfg`` 为 **dict**（经 configclass
     ``to_dict()`` 转换），并显式传 ``device``。
+
+    Args:
+        init_ckpt: 渐进微调起点 checkpoint（交接文档 13 节 policy 继承）。
+            下一阶段策略从上阶段 checkpoint 初始化，而不是从零/硬切换。
     """
     from rsl_rl.runners import OnPolicyRunner
 
@@ -102,6 +107,11 @@ def train(
         log_dir=str(log_root or "logs"),
         device=agent_cfg.device,
     )
+    if init_ckpt is not None:
+        if not init_ckpt.is_file():
+            raise FileNotFoundError(f"init_ckpt 不存在：{init_ckpt}")
+        runner.load(str(init_ckpt))
+        print(f"[train] 从 {init_ckpt.name} 初始化策略（渐进微调/策略继承）", flush=True)
     # rsl_rl 5.0.1：learn() 参数名为 init_at_random_ep_len（注意拼写）
     runner.learn(num_learning_iterations=max_iterations, init_at_random_ep_len=True)
     simulation_app.close()

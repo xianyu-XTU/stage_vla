@@ -28,8 +28,23 @@ METRICS = {
     "stage_progress": re.compile(r"Episode_Reward/stage_progress:\s+([-\d.]+)"),
     "stage_transition": re.compile(r"Episode_Reward/stage_transition:\s+([-\d.]+)"),
     "lifting_object": re.compile(r"Episode_Reward/lifting_object:\s+([-\d.]+)"),
+    "stage_goal": re.compile(r"Episode_Reward/stage_goal:\s+([-\d.]+)"),
+    "stage_grasp_hold": re.compile(r"Episode_Reward/stage_grasp_hold:\s+([-\d.]+)"),
+    "drop_penalty": re.compile(r"Episode_Reward/drop_penalty:\s+([-\d.]+)"),
     "success": re.compile(r"Episode_Termination/success:\s+([\d.]+)"),
 }
+
+# 指标 → (key, 图题, ylabel)；只画日志里实际有的
+ALL_PLOTS = [
+    ("mean_reward", "Mean reward", "cumulative reward"),
+    ("stage_goal", "stage_goal (grasp)", "grasp reward"),
+    ("stage_grasp_hold", "stage_grasp_hold", "hold reward"),
+    ("drop_penalty", "drop_penalty", "drop penalty"),
+    ("stage_transition", "stage_transition", "stage transitions"),
+    ("lifting_object", "lifting_object", "cube lifted reward"),
+    ("stage_progress", "stage_progress", "potential shaping"),
+    ("success", "success rate", "success"),
+]
 
 
 def parse(log: Path) -> dict[str, list[float]]:
@@ -59,6 +74,11 @@ def main() -> int:
     import matplotlib.pyplot as plt
 
     iters = range(n)
+    # 动态选择日志里实际有数据的指标
+    plots = [(k, t, y) for k, t, y in ALL_PLOTS if data.get(k)]
+    if not plots:
+        print("[plot] 无可用指标")
+        return 0
     n_plots = len(plots)
     ncols = 2
     nrows = (n_plots + 1) // 2
@@ -73,19 +93,7 @@ def main() -> int:
         a = np.convolve(xs, np.ones(window) / window, mode="valid")
         return a.tolist()
 
-    # 动态选择有数据的指标（优先显示核心项）
-    all_plots = [
-        ("mean_reward", "Mean reward", "cumulative reward"),
-        ("stage_transition", "stage_transition", "stage transitions"),
-        ("lifting_object", "lifting_object", "cube lifted reward"),
-        ("stage_progress", "stage_progress", "potential shaping"),
-        ("success", "success rate", "success"),
-    ]
-    plots = [(k, t, y) for k, t, y in all_plots if data.get(k)]
-    if not plots:
-        print("[plot] 无可用指标")
-        return 0
-    for ax, (key, title, ylabel) in zip(axes.flat, plots):
+    for ax, (key, title, ylabel) in zip(axes, plots):
         vals = data[key]
         if not vals:
             ax.set_title(f"{title}: no data")

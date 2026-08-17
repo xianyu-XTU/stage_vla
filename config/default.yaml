@@ -61,6 +61,7 @@ reward_weights:
   move: 0.5                # 移动对齐完成
   stack: 10.0              # 堆叠完成（最终目标）
   lift_object: 15.0        # 方块被抬起(高于阈值)每步重奖 —— 官方 Isaac-Lift 机制，驱动真抓取
+  drop_penalty: 10.0       # 掉块惩罚：上一步抓住、本步丢失（grasp-gated 奖励的配套约束）
 
 # ---------- PPO 训练超参（rsl_rl 5.x） ----------
 ppo:

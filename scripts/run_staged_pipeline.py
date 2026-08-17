@@ -73,16 +73,24 @@ def main() -> int:
     agent_cfg = build_agent_cfg(dict(settings.ppo))
     policies = {s: load_stage_policy(env, agent_cfg, s, dev) for s in ["grasp", "lift", "move", "stack"]}
 
-    from stage_vla.stages.rewards_isaac import detect_stage_from_env
+    from stage_vla.stages import grasp as grasp_geo
+    from stage_vla.stages.rewards_isaac import _physical_grasp, detect_stage_from_env, red_on_blue_success
+    from stage_vla.rl.diagnostics import StageMetrics
 
     env.reset()
     obs = env.get_observations()
     frames, stage_history = [], []
     policy_key = "grasp"          # 从 grasp 策略开始
     hold = 0                      # 当前阶段保持计数（防瞬时信号误切换）
+    drop_streak = 0               # 连续丢抓取步数（掉块回退用）
+    DROP_FALLBACK_STEPS = 10      # lift/move/stack 阶段丢抓取这么久 → 回退 grasp 重抓
+    metrics = StageMetrics()      # 阶段诊断指标（交接文档 16 节）
+    cube2, cube1, robot = inner.scene["cube_2"], inner.scene["cube_1"], inner.scene["robot"]
+
     for step in range(args.steps):
         # 检测当前阶段，据此切换策略（grasp 0-1 / lift 1-2 / move 2-3 / stack 3-4）
         stage = int(detect_stage_from_env(inner)[0].item())
+        physical = bool(_physical_grasp(inner)[0])
         if stage >= 3 and policy_key != "stack":
             policy_key = "stack"; hold = 0
             print(f"[pipe] 进入 stack 阶段 @{step}", flush=True)
@@ -93,9 +101,35 @@ def main() -> int:
             hold += 1
             if hold >= 20:        # 稳定抓到 20 步才切 lift（防瞬时 grasp 误切）
                 policy_key = "lift"; hold = 0
-                print(f"[pipe] 进入 lift 阶段 @{step}（稳定抓到{hold}步）", flush=True)
+                print(f"[pipe] 进入 lift 阶段 @{step}（稳定抓够 20 步）", flush=True)
         else:
             hold = 0
+
+        # 掉块回退（交接文档 14 节）：lift/move/stack 阶段丢失稳定抓取足够久 → 回退 grasp 重抓
+        if policy_key in ("lift", "move", "stack") and not physical:
+            drop_streak += 1
+            if drop_streak >= DROP_FALLBACK_STEPS:
+                print(f"[pipe] 掉块回退 → grasp @{step}（丢抓取 {drop_streak} 步）", flush=True)
+                policy_key = "grasp"; hold = 0; drop_streak = 0
+        else:
+            drop_streak = 0
+
+        # 记录诊断指标
+        finger = robot.data.joint_pos[0, 7:9]
+        released = bool(torch.isclose(finger, torch.full_like(finger, 0.04), atol=1e-3).all())
+        metrics.record(
+            stage=stage,
+            physical=physical,
+            cube_z=float(cube2.data.root_pos_w[0, 2]),
+            cube_vel=cube2.data.root_lin_vel_w[0],
+            released=released,
+            rb_frame=bool(
+                grasp_geo.red_on_blue_frame(
+                    cube2.data.root_pos_w[0], cube1.data.root_pos_w[0],
+                    finger, cube2.data.root_lin_vel_w[0],
+                )[0]
+            ),
+        )
 
         policy = policies.get(policy_key)
         if policy is None:
@@ -113,10 +147,12 @@ def main() -> int:
             break
 
     # 统计
+    metrics.end_episode(bool(red_on_blue_success(inner)[0]))
     import collections
     dist = dict(sorted(collections.Counter(stage_history).items()))
     max_stage = max(stage_history) if stage_history else 0
     print(f"[pipe] 到达最高阶段={['approach','grasp','lift','move','stack'][max_stage]} 阶段分布={dist}", flush=True)
+    metrics.print_report()
 
     # 录像
     if frames:

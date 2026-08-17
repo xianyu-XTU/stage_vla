@@ -1,7 +1,7 @@
-# stage_vla 项目现状总结（供外部咨询）
+# stage_vla 项目现状总结（供外部咨询 · v2 更新）
 
 > 本文档由 Claude 整理，用于向其他 AI/专家咨询未解决的核心问题。自包含，无需额外背景。
-> 最后更新：2026-08-17
+> 最后更新：2026-08-17（本版含上次咨询后(2026-08-17)的全部修复与实验数据）
 
 ---
 
@@ -11,10 +11,10 @@
 
 用 **视觉-语言-动作模型（VLA）+ 阶段感知强化学习（StARe-PPO）** 驱动 Franka 机械臂完成
 "抓取方块→堆叠"长程任务，并对 VLA 模型轻量化（LoRA + 量化 + 蒸馏），目标消费级显卡
-（RTX 3060/4060，8GB）可训练。
+（RTX 4060，8GB 显存）。
 
 **核心创新点**：把长程任务拆成语义子阶段（approach→grasp→lift→move→stack），
-给每阶段稠密奖励，解决 RL "奖励稀疏、学不动"的问题。
+给每阶段稠密奖励，解决稀疏奖励"学不动"的问题。
 
 ---
 
@@ -23,136 +23,99 @@
 | 项 | 值 |
 |---|---|
 | GPU | NVIDIA RTX 4060（8.6GB 显存） |
-| 仿真 | Isaac Lab 3.0.0 + 内嵌 Isaac Sim（`E:\work\IsaacLab`） |
-| RL 库 | rsl_rl 5.0.1（PPO） |
-| 任务 | `Isaac-Stack-Cube-Franka-IK-Rel-v0`（状态版）/ `-Visuomotor-v0`（视觉版）|
-| 机器人 | Franka Panda（7 臂 + 2 指），IK 相对控制（7 维动作：6 末端增量 + 1 夹爪）|
-| 方块 | 5cm 红色方块（cube_2，要抓），5cm 蓝色方块（cube_1，堆叠底座）|
-
-**8GB 硬约束**：OpenVLA-7B 无法与渲染共存 → 用轻量/冻结模型；相机分辨率压到 96-128；
-可训练头放 CPU（GPU backward 与 Isaac 渲染冲突会 device assert）。
+| 仿真 | Isaac Lab 3.0.0 + Isaac Sim 6.0.1 |
+| RL 库 | rsl_rl 5.0.1（PPO，自研 VLA-PPO 循环另见 `rl/ppo_loop.py`） |
+| 任务 | `Isaac-Stack-Cube-Franka-IK-Rel-v0`（状态版 IK 相对控制） |
+| 机器人 | Franka Panda（7 臂 + 2 指），7 维动作（6 末端增量 + 1 夹爪，0=开/-1=闭） |
+| 方块 | 5cm 红块（cube_2，要抓）+ 5cm 蓝块（cube_1，底座）+ 5cm 绿块（cube_3，干扰） |
 
 ---
 
-## 3. 已完成的工作（全部可运行、有数据）
+## 3. ⭐ 上次咨询后的核心修复（2026-08-17，全部有实验数据）
 
-### 3.1 工程基础
-- 私有 GitHub 仓库 `xianyu-XTU/stage_vla`，干净骨架、机器无关配置、CI 卫生检查
-- 54 项单元测试全绿
+上次咨询说"success 恒 0，物理抓取是终极瓶颈"。本轮逐一定位并修复：
 
-### 3.2 阶段感知 RL（线1，状态版）
-- **阶段检测器**：向量化几何判定（approach/grasp/lift/move/stack）
-- **稠密奖励**：势能塑形 `γφ(s_t)−φ(s_{t−1})` + 阶段完成奖 + 动作惩罚
-- **对比实验**（400 迭代）：阶段感知组 mean reward **29.3 vs 基线 -0.2**，阶段塑形有效
-- **1000-3000 迭代长训**：reward 从 -0.3 涨到 51-88，**但完整任务 success 始终 0**
+### 3.1 【最重要】success 定义错误 —— 结构上不可能触发（已修 + 验证）
+- 任务 `terminations.success` 继承官方 `mdp.cubes_stacked`：要求**三块塔**（蓝压红 + 红压绿 +
+  夹爪开）。而项目目标是 **red-on-blue**（红压蓝）——**叠放方向相反**，即使红块完美放好，
+  success 也**结构上永远为 0**。
+- 修复：自定义 `red_on_blue_success`（红块在蓝块上 + 夹爪释放 + 低速 + 持续 20 帧）。
+- **scripted 冒烟验证通过**（`tools/diag_red_on_blue.py`）：精确放置 → 稳定 20 帧 → success 触发 ✅。
 
-### 3.3 官方机制应用
-- 照官方 `Isaac-Lift-Cube-Franka-v0` 加 **`object_is_lifted` 奖励**（方块被抬起高权重 15）
-  → 策略开始抬起方块（训练中 lifting_object 峰值 14.7，视频验证抬起 390/400 步）
-- **防奖励黑客**：阶段完成奖只发首次（修复反复跨阶段刷奖）
+### 3.2 物理求解器 —— 静态堆叠稳定性（已修 + 验证）
+- 实测：默认 PhysX TGS 下，完美静态堆叠 ~10 env step 就散架（"noisy velocities" 警告）。
+  这解释了为什么即使策略真的叠好，20 帧持续 success 也永远达不到。
+- 修复：`enable_external_forces_every_iteration=True`（`cfg_surgery._stabilize_stack_physics`）
+  → 稳定窗口 **10→20 帧**，恰好够 success 判定。
 
-### 3.4 分阶段 RL（课程式，当前主线）
-把任务拆成 4 个独立 RL 问题，各自训练：
-| 阶段 | 奖励 | 单独效果 |
-|---|---|---|
-| **grasp** | 对侧抓取 + 显式闭合（社区方案） | ✅ 稳定抓住 330 步（隔离测试）|
-| **lift** | 方块被抬起（权重 15） | ⚠️ 抬起信号触发但只 ~3% |
-| **move** | 方块靠近目标 `1−tanh(d/std)` | ✅ 信号明显 |
-| **stack** | 稠密堆叠（水平对齐×高度对齐） | ⚠️ 有信号但没稳定堆叠 |
+### 3.3 物理抓取几何定义 —— 指尖帧 bug（已修 + 验证）
+- 根因：`_physical_grasp` 用 `body_pos_w[panda_leftfinger/rightfinger]`，那是手指**根/枢轴**
+  （近手心）不是指尖 → "方块在两指之间"判定永远不成立。
+- 修复：改用 FrameTransformer 的指尖帧（`ee_frame.data.target_pos_w[:,1]` 右/`[:,2]` 左）。
+- **scripted 验证**（`tools/diag_physical_grasp.py`）：指尖降到方块高度+闭合 → `physical=True` ✅。
 
-每个阶段独立 checkpoint（`logs/stage_<name>/`），有组合执行脚本。
+### 3.4 抓取奖励重平衡（三轮迭代）
+| 版本 | 改动 | reward | physical_grasp |
+|---|---|---|---|
+| v1（500 iter） | 新奖励原版 | ~250（hover 虚高） | 0.000 |
+| v2（opp 压到 0.3） | 去免费 hover 分 | ~78 | 0.000 |
+| v3（+height_align 引导下降） | 分层引导下降 | 76→147 | **0.001** |
+| v4（3000 iter, 128 env） | 长训 | 160→**214** | **0.000（见 3.5）** |
 
-### 3.5 其他成果
-- **VLA-light**：去 LLM 的轻量 VLA（指令分词器 29M 替代 Llama-2 7B，体积 -88%）
-- **视觉引导的基础动作策略**：指令→基础动作分解 + 视觉→当前动作分类（40 张数据上 acc 1.0）
-- **训练曲线工具**：`tools/plot_curves.py` 出 PNG
-- **视频渲染**：`scripts/render_grasp_video.py` 出 mp4（抬起方块视频）
-
----
-
-## 4. ⭐ 核心未解问题：完整任务 success 恒为 0
-
-**现象**：所有训练（单策略 1000-3000 迭代、分阶段 RL）的完整任务成功率（`Episode_Termination/success`）**始终为 0**。
-策略能学会"接近→抓取→抬起"（各阶段信号都触发），但**从未完成"移动→堆叠"的完整闭环**。
-
-**分阶段组合执行**（串联 4 个策略）：到达最高阶段 = **grasp**，交接给 lift 时抓持丢失（方块掉落）。
+### 3.5 3000 迭代长训暴露的【最后一个奖励漏洞】（已修，未重训验证）
+- 3000 迭代 grasp 策略 reward 学到 214、grasp 奖励 value≈0.88，但 **physical_grasp_rate=0.000**。
+- 根因：`close` 奖励项（手指闭合 × 贴近，权重 3.0）**不要求方块在两指之间**——
+  策略学会"下降 + 闭合空手"骗分（value 0.88 全靠 close+height_align，physical 为 0）。
+- 修复：`close` 项用 `cube_between_fingers` 门控（`close = between * closing * near`），
+  只有方块真的在两指之间，闭合才给分。**尚未重训验证**。
 
 ---
 
-## 5. 排查过的根因（已排除 vs 待解）
+## 4. 当前核心未解问题（本次想请外部 AI 解答）
 
-### 已排除
-| 假设 | 结论 |
-|---|---|
-| 方块太大够不着 | ❌ 排除：Franka 手指全开 **80mm**（实测），> 方块 50mm |
-| 末端高度/定位不对 | ❌ 排除：自适应再对齐到 0.2mm，指尖到方块中心高度，仍失败 |
-| 下降撞走方块 | ❌ 排除：实测方块位移 0.0mm |
-| 摩擦不够 | ❌ 排除：高摩擦（3.0）仍掉落 |
+**问题收敛为一条：如何让 grasp 策略真正学到"稳定物理抓取 + 抬升不掉"？**
 
-### 已定位（关键发现）
-1. **`object_grasped` 是几何判定，不是物理判定**：只检查"方块距末端 <6cm 且手指闭合"，
-   **不检查方块是否真在手指之间** → 信号触发≠真夹住。
-2. **手指对侧问题**（社区 Issue #204 确认）：朴素距离奖励产生"手指同侧"局部最优。
-   → **已用对侧抓取奖励缓解**（grasp 策略稳定 330 步），但交接时仍丢。
-3. **物理抓取可靠性是终极瓶颈**：即使单个 grasp 策略能稳定抓住，
-   **跨阶段交接**（grasp→lift）要求"稳定抓持"硬前提，而 lift 策略接手后握不住。
+具体表现：
+- 3000 迭代 grasp 只训出"接近/下降/空手闭合"（reward 214 但 physical_grasp=0）；
+- 即使 scripted 抓取 `physical=True`（指尖环绕方块+闭合），**抬升时方块滑脱**（cube 留桌面）——
+  脚本化抓取时指尖夹在方块**上缘**（z≈0.047 vs 方块顶 0.0437），夹的是顶角不是中部；
+- 因此完整任务 success 仍为 0（grasp 阶段都未稳定，更未训 lift/move/stack）。
 
-### 待解（核心疑问）
-**如何让 RL 策略稳定地"抓稳并抬起来，然后不丢地完成移动和堆叠"？**
-具体表现为：分阶段交接 grasp→lift 时，lift 策略（单独训练抬升）接手后丢抓取。
-
----
-
-## 6. 已尝试的奖励方案与数据
-
-| 方案 | 关键代码 | 效果 |
-|---|---|---|
-| 阶段势能塑形（非饱和距离势能） | `stage_vla/stages/rewards_isaac.py:_shaping_potential` | reward 学习，但 success 0 |
-| 阶段完成奖（首次进入） | `rewards.stage_completion_reward_first_time` | 防黑客，但阶段学习变弱 |
-| object_is_lifted（官方机制） | `rewards_isaac.object_is_lifted_reward` | 抬起信号出现（峰值14.7）|
-| 对侧抓取奖励（社区 Issue #204） | `rewards_isaac.object_grasped_opposite_reward` | grasp 稳定 330 步 |
-| 显式闭合奖励 | `rewards_isaac.object_grasp_combined_reward` | 补闭合动作 |
-| 稠密堆叠（水平×高度对齐） | `rewards_isaac.object_stacked_dense_reward` | 有信号但未稳定 |
-
-**训练数据**：
-- 3000 迭代长训：mean_reward 0→51，lifting_object 峰值 14.7，success 0
-- grasp 阶段：稳定抓住 330 步（隔离）
-- 组合执行：到达 grasp 后交接丢失
-
-**训练曲线**：`outputs/training_curves.png`，**视频**：`outputs/grasp_video.mp4`（抬起方块）。
+### 具体问题
+1. **奖励设计**：除已修的 close 门控，还有哪些抓取奖励的坑？如何让策略学到"指尖先环绕方块
+   中部、再闭合"的稳定抓持（而不是空手闭合/夹上缘）？是否需要把"抓持高度"显式编码进奖励？
+2. **抬升稳定**：Franka 夹 5cm 方块、scripted 抓上缘就滑脱——是抓取高度/接触点问题，
+   还是需要改物理（摩擦/接触模型/夹爪刚度）？有什么办法让抓持落在方块中部？
+3. **课程/结构**：分阶段独立训练 + state-bank 重置（已实现，`--state_bank`）是不是正确路径？
+   还是应该 grasp 阶段直接并入 lift（单个策略学"抓+抬"）避免交接？
+4. **真实抓取真值**：已接好 ContactSensor 接口（`--use_contact_sensor`）但未验证。几何代理
+   （两指间+未全开+贴近）是否够，还是必须用接触力？
+5. **物理可行性**：RTX 4060 8GB + Isaac Lab TGS + 5cm 方块，稳定抓取是否本质上很难？
+   有没有已知的 Franka+StackCube 稳定抓取配置（摩擦/刚度/抓取位姿）？
 
 ---
 
-## 7. 关键代码位置
+## 5. 关键代码位置
 
 | 组件 | 路径 |
 |---|---|
-| 阶段奖励 | `stage_vla/stages/rewards_isaac.py`、`rewards.py` |
-| 阶段检测器 | `stage_vla/stages/detector.py`、`calculator.py` |
-| 分阶段训练 | `scripts/train_stage.py` |
-| 组合执行 | `scripts/run_staged_pipeline.py` |
-| 视频渲染 | `scripts/render_grasp_video.py` |
-| 训练曲线 | `tools/plot_curves.py` |
-| 配置 | `config/default.yaml`（reward_weights / thresholds）|
+| 项目自定 success | `stage_vla/stages/rewards_isaac.py:red_on_blue_success` |
+| 物理抓取（指尖帧） | `stage_vla/stages/rewards_isaac.py:_physical_grasp` |
+| 纯几何抓取判定 | `stage_vla/stages/grasp.py` |
+| 抓取奖励（opp/height/close/physical） | `rewards_isaac.object_grasp_combined_reward` |
+| 阶段奖励/势能 | `rewards_isaac.py`、`rewards.py` |
+| 物理求解器修复 | `envs/cfg_surgery.py:_stabilize_stack_physics` |
+| 分阶段训练 | `scripts/train_stage.py`（`--stage grasp --max_iterations 3000`） |
+| 阶段诊断指标 | `tools/collect_diagnostics.py` + `rl/diagnostics.py` |
+| 冒烟/scripted 验证 | `tools/diag_red_on_blue.py`、`tools/diag_physical_grasp.py` |
+| 训练曲线 | `tools/plot_curves.py` → `outputs/training_curves.png` |
+| 研发记录 | `docs/research_log.md`（全部实验迭代） |
 
 ---
 
-## 8. 想请外部 AI 帮忙解答的具体问题
-
-1. **如何让 RL 策略稳定完成"抓稳→抬起→移动→堆叠"？**
-   - 分阶段交接 grasp→lift 丢抓取，是否有更好的交接/组合策略？
-   - 是否应该让单个策略学完整序列（而非分阶段）？分阶段有什么正确做法？
-2. **物理抓取在 Isaac Lab 中不稳的根本解决**：除了对侧奖励，还有什么机制能保证
-   "手指在方块两侧且夹稳"？是否需要改物理参数（摩擦/接触/夹爪刚度）？
-3. **分阶段 RL 的正确实现**：各阶段策略如何训练/交接才能串联成功？
-   是否需要每阶段从上一阶段的结束状态初始化（而不是都从桌面初始）？
-4. **是否应该用联合训练/课程学习/层级 RL**？还是直接加大训练量（官方 12000 迭代）？
-5. **success 恒 0 是否意味着奖励设计或任务定义有问题**？如何诊断？
-
----
-
-## 附：环境访问方式（如需复现）
-- 项目根：`E:\stage_vla_v2`
-- 运行训练：`python tools\run_isaaclab.py scripts\train_stage.py --stage grasp --max_iterations 2000`
-- 配置：`config\default.yaml`
-- 所有产物（曲线/视频/checkpoint）在 `outputs/` 和 `logs/`
+## 6. 环境访问方式（如需复现）
+- 项目根：`E:\stage_vla_v2`（GitHub public：`https://github.com/xianyu-XTU/stage_vla`）
+- 跑训练：`python tools\run_isaaclab.py scripts\train_stage.py --stage grasp --max_iterations 3000`
+- 诊断：`python tools\run_isaaclab.py tools\collect_diagnostics.py --checkpoint logs\stage_grasp\model_2999.pt`
+- 冒烟：`python tools\run_isaaclab.py tools\diag_red_on_blue.py`
+- 配置：`config\default.yaml`；产物在 `outputs/`、`logs/`
