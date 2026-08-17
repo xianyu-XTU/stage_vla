@@ -73,6 +73,8 @@ def build_stage_env_cfg(settings, stage: str, num_envs: int, seed: int):
             weight=settings.reward_weights["progress_shaping"],
         )
         stage_goal = RewardTerm(func=stage_func, weight=weight)
+        # 所有阶段都保持抓稳（组合抓取信号）——接手后不丢抓取
+        stage_grasp_hold = RewardTerm(func=object_grasp_combined_reward, weight=3.0)
 
     env_cfg.rewards = StageRewardsCfg()
     return env_cfg
