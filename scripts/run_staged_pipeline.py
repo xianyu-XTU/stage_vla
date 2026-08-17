@@ -30,13 +30,14 @@ def load_stage_policy(env, agent_cfg, stage: str, device):
     from rsl_rl.runners import OnPolicyRunner
 
     run_dir = _ROOT / "logs" / f"stage_{stage}"
-    ckpts = sorted(run_dir.glob("model_*.pt"))
+    # 按迭代号自然排序（字符串排序 model_9 > model_20，会选错）
+    ckpts = sorted(run_dir.glob("model_*.pt"), key=lambda p: int(p.stem.split("_")[-1]))
     if not ckpts:
         print(f"[pipe] 无 {stage} checkpoint: {run_dir}", flush=True)
         return None
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=str(run_dir))
     runner.load(str(ckpts[-1]))
-    print(f"[pipe] 加载 {stage} 策略 {ckpts[-1].name}", flush=True)
+    print(f"[pipe] 加载 {stage} 策略 {ckpts[-1].name}（iter {ckpts[-1].stem}）", flush=True)
     return runner.get_inference_policy(device=device)
 
 
@@ -77,20 +78,24 @@ def main() -> int:
     env.reset()
     obs = env.get_observations()
     frames, stage_history = [], []
-    current_stage = 0
     policy_key = "grasp"          # 从 grasp 策略开始
+    hold = 0                      # 当前阶段保持计数（防瞬时信号误切换）
     for step in range(args.steps):
-        # 检测当前阶段，据此切换策略（grasp→0,1 / lift→2 / move→3 / stack→4）
+        # 检测当前阶段，据此切换策略（grasp 0-1 / lift 1-2 / move 2-3 / stack 3-4）
         stage = int(detect_stage_from_env(inner)[0].item())
-        if stage >= 4 and policy_key != "stack":
-            policy_key = "stack"
+        if stage >= 3 and policy_key != "stack":
+            policy_key = "stack"; hold = 0
             print(f"[pipe] 进入 stack 阶段 @{step}", flush=True)
-        elif stage >= 3 and policy_key not in ("stack", "move"):
-            policy_key = "move"
+        elif stage >= 2 and policy_key in ("grasp", "lift"):
+            policy_key = "move"; hold = 0
             print(f"[pipe] 进入 move 阶段 @{step}", flush=True)
-        elif stage >= 2 and policy_key == "grasp":
-            policy_key = "lift"
-            print(f"[pipe] 进入 lift 阶段 @{step}", flush=True)
+        elif stage >= 1 and policy_key == "grasp":
+            hold += 1
+            if hold >= 20:        # 稳定抓到 20 步才切 lift（防瞬时 grasp 误切）
+                policy_key = "lift"; hold = 0
+                print(f"[pipe] 进入 lift 阶段 @{step}（稳定抓到{hold}步）", flush=True)
+        else:
+            hold = 0
 
         policy = policies.get(policy_key)
         if policy is None:

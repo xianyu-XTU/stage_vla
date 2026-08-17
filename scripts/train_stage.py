@@ -29,7 +29,7 @@ from stage_vla.rl.runner import train  # noqa: E402
 
 # 各阶段的奖励配置（奖励函数 + 权重）
 STAGE_REWARDS = {
-    "grasp": ("object_grasped_opposite_reward", 5.0),   # 对侧抓取奖励（社区方案，直指根因）
+    "grasp": ("object_grasp_combined_reward", 5.0),   # 对侧定位 + 显式闭合（社区完整方案）
     "lift": ("object_is_lifted_reward", 15.0),
     "move": ("object_near_goal_reward", 5.0),
     "stack": ("object_stacked_dense_reward", 10.0),   # 稠密奖励（稀疏的学不会）
@@ -44,7 +44,7 @@ def build_stage_env_cfg(settings, stage: str, num_envs: int, seed: int):
     from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
     from stage_vla.stages.rewards_isaac import (
-        object_grasped_opposite_reward,
+        object_grasp_combined_reward,
         object_is_lifted_reward,
         object_near_goal_reward,
         object_stacked_dense_reward,
@@ -58,7 +58,7 @@ def build_stage_env_cfg(settings, stage: str, num_envs: int, seed: int):
 
     func_name, weight = STAGE_REWARDS[stage]
     stage_func = {
-        "object_grasped_opposite_reward": object_grasped_opposite_reward,
+        "object_grasp_combined_reward": object_grasp_combined_reward,
         "object_is_lifted_reward": object_is_lifted_reward,
         "object_near_goal_reward": object_near_goal_reward,
         "object_stacked_dense_reward": object_stacked_dense_reward,

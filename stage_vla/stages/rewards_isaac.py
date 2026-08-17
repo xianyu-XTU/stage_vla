@@ -222,6 +222,36 @@ def object_grasped_opposite_reward(env) -> torch.Tensor:
     return 1.0 - torch.tanh(direction) * (l_dist + r_dist)
 
 
+def object_grasp_combined_reward(env, close_scale: float = 3.0) -> torch.Tensor:
+    """组合抓取奖励 = 对侧定位 + 显式闭合（社区方案完整版）。
+
+    对侧奖励让手指**定位**到方块两侧，但不会让手指**闭合**；显式闭合奖励
+    在"方块接近末端 + 手指闭合"时给高奖，补上闭合动作。两者结合才是
+    "真正抓住"的完整信号。
+    """
+    env = getattr(env, "unwrapped", env)
+    det = _get_detector()
+    robot = env.scene["robot"]
+    cube = env.scene[det.cube_to_grasp].data.root_pos_w
+    ee = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+    d = torch.linalg.norm(cube - ee, dim=1)
+
+    finger = robot.data.joint_pos[:, 7:9]
+    closed = (finger < 0.01).all(dim=-1).float()
+
+    # 对侧定位（稠密）
+    body_names = robot.data.body_names
+    lfinger = robot.data.body_pos_w[:, body_names.index("panda_leftfinger")]
+    rfinger = robot.data.body_pos_w[:, body_names.index("panda_rightfinger")]
+    vec_l, vec_r = lfinger - cube, rfinger - cube
+    direction = (vec_l * vec_r).sum(-1)
+    opp = 1.0 - torch.tanh(direction) * (vec_l.norm(-1) + vec_r.norm(-1))
+
+    # 显式闭合（方块近 + 手指闭 → 高）
+    close = closed * (1.0 - torch.tanh(d / 0.05))
+    return opp + close_scale * close
+
+
 def object_near_goal_reward(env, std: float = 0.1, object_cfg: str | None = None) -> torch.Tensor:
     """移动奖励（分阶段 RL 用）：目标方块靠近底座方块 → 1 - tanh(距离/std)。"""
     env = getattr(env, "unwrapped", env)
