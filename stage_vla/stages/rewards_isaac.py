@@ -192,6 +192,36 @@ def object_grasped_reward(env) -> torch.Tensor:
     ).float()
 
 
+def object_grasped_opposite_reward(env) -> torch.Tensor:
+    """**对侧抓取奖励**（社区方案，Isaac Lab Issue #204）：奖励手指在方块两侧。
+
+    朴素距离奖励产生"手指同侧"局部最优（抓不稳、掉落）。本函数验证两根手指
+    指向方块的向量方向：方块在手指之间时向量方向相反（点积小）→ 奖励高；
+    手指同侧时点积大 → 奖励低。结合手指距离，同时奖励"靠近 + 对侧"。
+
+    .. code-block::
+
+        vec_l = lfinger - cube;  vec_r = rfinger - cube
+        reward = 1 - tanh(sum(vec_l * vec_r)) * (|vec_l| + |vec_r|)
+    """
+    env = getattr(env, "unwrapped", env)
+    det = _get_detector()
+    robot = env.scene["robot"]
+    body_names = robot.data.body_names
+    lf_id = body_names.index("panda_leftfinger")
+    rf_id = body_names.index("panda_rightfinger")
+    lfinger = robot.data.body_pos_w[:, lf_id]
+    rfinger = robot.data.body_pos_w[:, rf_id]
+    cube = env.scene[det.cube_to_grasp].data.root_pos_w
+
+    vec_l = lfinger - cube
+    vec_r = rfinger - cube
+    direction = (vec_l * vec_r).sum(-1)          # 点积：对侧为负 → tanh 负 → 奖励高
+    l_dist = vec_l.norm(dim=-1)
+    r_dist = vec_r.norm(dim=-1)
+    return 1.0 - torch.tanh(direction) * (l_dist + r_dist)
+
+
 def object_near_goal_reward(env, std: float = 0.1, object_cfg: str | None = None) -> torch.Tensor:
     """移动奖励（分阶段 RL 用）：目标方块靠近底座方块 → 1 - tanh(距离/std)。"""
     env = getattr(env, "unwrapped", env)
